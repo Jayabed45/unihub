@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { LucideIcon } from 'lucide-react';
+import { LogOut, LucideIcon } from 'lucide-react';
 import clsx from 'clsx';
 
 type SidebarItem = {
@@ -14,9 +14,11 @@ type SidebarItem = {
 
 type SidebarProps<T extends SidebarItem> = {
   items: readonly T[];
+  onLogout?: () => void;
+  logoutDisabled?: boolean;
 };
 
-export default function Sidebar<T extends SidebarItem>({ items }: SidebarProps<T>) {
+export default function Sidebar<T extends SidebarItem>({ items, onLogout, logoutDisabled }: SidebarProps<T>) {
   const pathname = usePathname();
 
   return (
@@ -46,8 +48,17 @@ export default function Sidebar<T extends SidebarItem>({ items }: SidebarProps<T
           );
         })}
       </nav>
-      <div className="px-6 py-6 text-xs text-gray-400">
-        © {new Date().getFullYear()} UniHub Extension Services
+      <div className="px-6 py-6 space-y-4 text-xs text-gray-400">
+        <button
+          type="button"
+          onClick={onLogout}
+          disabled={!onLogout || logoutDisabled}
+          className="flex w-full items-center justify-center gap-2 rounded-xl border border-yellow-200 px-3 py-2 text-sm font-medium text-yellow-600 transition hover:bg-yellow-50 disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          <LogOut className={`h-4 w-4 ${logoutDisabled ? 'animate-pulse' : ''}`} />
+          Logout
+        </button>
+        <p>© {new Date().getFullYear()} UniHub Extension Services</p>
       </div>
     </aside>
   );

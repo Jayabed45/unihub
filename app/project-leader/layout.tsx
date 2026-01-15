@@ -1,6 +1,6 @@
 'use client';
 
-import { ReactNode, useEffect, useState } from 'react';
+import { ReactNode, useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 
 import Sidebar from './components/Sidebar';
@@ -17,6 +17,26 @@ interface StoredUser {
 export default function ProjectLeaderLayout({ children }: { children: ReactNode }) {
   const router = useRouter();
   const [isAuthorized, setIsAuthorized] = useState(false);
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
+  const [logoutProgress, setLogoutProgress] = useState(0);
+
+  const handleLogout = useCallback(() => {
+    if (isLoggingOut) return;
+
+    setIsLoggingOut(true);
+    setLogoutProgress((prev) => (prev === 0 ? 10 : prev));
+
+    window.setTimeout(() => {
+      setLogoutProgress(100);
+      window.localStorage.removeItem(STORAGE_KEY);
+      router.replace('/');
+
+      window.setTimeout(() => {
+        setIsAuthorized(false);
+        setIsLoggingOut(false);
+      }, 400);
+    }, 600);
+  }, [isLoggingOut, router]);
 
   useEffect(() => {
     try {
@@ -41,13 +61,43 @@ export default function ProjectLeaderLayout({ children }: { children: ReactNode 
     }
   }, [router]);
 
-  if (!isAuthorized) {
+  useEffect(() => {
+    if (!isLoggingOut) {
+      setLogoutProgress(0);
+      return;
+    }
+
+    const interval = window.setInterval(() => {
+      setLogoutProgress((prev) => {
+        if (prev >= 90) {
+          return prev;
+        }
+
+        const nextValue = prev + Math.random() * 15;
+        return Math.min(nextValue, 90);
+      });
+    }, 180);
+
+    return () => {
+      window.clearInterval(interval);
+    };
+  }, [isLoggingOut]);
+
+  if (!isAuthorized && !isLoggingOut) {
     return null;
   }
 
   return (
     <div className="flex min-h-screen bg-gradient-to-br from-yellow-50 via-white to-white">
-      <Sidebar items={projectLeaderNavigation} />
+      {logoutProgress > 0 && (
+        <div className="fixed inset-x-0 top-0 z-50">
+          <div
+            className="h-1 w-full origin-left bg-gradient-to-r from-yellow-400 via-yellow-500 to-yellow-600 transition-[transform,width] duration-500"
+            style={{ width: `${logoutProgress}%` }}
+          />
+        </div>
+      )}
+      <Sidebar items={projectLeaderNavigation} onLogout={handleLogout} logoutDisabled={isLoggingOut} />
 
       <main className="flex-1">
         <div className="mx-auto max-w-6xl px-6 py-10">

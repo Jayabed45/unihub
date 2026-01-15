@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState, useEffect } from 'react';
+import { useMemo, useState, useEffect, Fragment } from 'react';
 import { usePathname } from 'next/navigation';
 import { PlusCircle, Filter, CalendarDays } from 'lucide-react';
 
@@ -13,6 +13,8 @@ const textareaClassName =
 const tableCellClassName = 'border border-yellow-200 px-3 py-2 align-top';
 const tableHeadCellClassName = 'border border-yellow-200 bg-yellow-100 px-3 py-2 text-left font-semibold text-gray-800';
 const editableCellProps = { contentEditable: true, suppressContentEditableWarning: true } as const;
+const esdGoalCount = 17;
+const esdGoalColumns = 3;
 const respondentSurveyQuestions = [
   { text: 'Nakataas ang bayranon sa kuryente?' },
   { text: 'Naay estudyante sa panimalay?' },
@@ -62,53 +64,66 @@ export default function ProjectLeaderProjectsPage() {
               Provide a concise overview of the project and the essential administrative details required by the
               extension office.
             </p>
-            <div className="grid gap-4 md:grid-cols-2">
-              <label className="flex flex-col gap-1 text-sm font-medium text-gray-900">
-                Title of the Project
+            <div className="space-y-3 text-sm text-gray-900">
+              <div className="grid items-start gap-3 md:grid-cols-[240px_16px_1fr]">
+                <span className="font-semibold text-gray-900">Title of the project</span>
+                <span className="font-semibold text-gray-500">:</span>
                 <input className={inputClassName} placeholder="Enter project title" />
-              </label>
-              <label className="flex flex-col gap-1 text-sm font-medium text-gray-900">
-                Project Locale
-                <input className={inputClassName} placeholder="Municipality / Barangay / Campus" />
-              </label>
-              <label className="flex flex-col gap-1 text-sm font-medium text-gray-900">
-                Target Beneficiaries
-                <input className={inputClassName} placeholder="Group / Sector" />
-              </label>
-              <label className="flex flex-col gap-1 text-sm font-medium text-gray-900">
-                Total Number of Beneficiaries
-                <input className={inputClassName} placeholder="e.g., 60" />
-              </label>
-              <label className="flex flex-col gap-1 text-sm font-medium text-gray-900">
-                Project Duration
-                <input className={inputClassName} placeholder="e.g., January – June 2026" />
-              </label>
-              <label className="flex flex-col gap-1 text-sm font-medium text-gray-900">
-                Total Project Cost
-                <input className={inputClassName} placeholder="e.g., ₱150,000" />
-              </label>
-              <label className="flex flex-col gap-1 text-sm font-medium text-gray-900">
-                Implementing Academic Program/s
-                <input className={inputClassName} placeholder="List participating programs" />
-              </label>
-              <label className="flex flex-col gap-1 text-sm font-medium text-gray-900">
-                Implementing Student Organization/s
-                <input className={inputClassName} placeholder="List participating organizations" />
-              </label>
+              </div>
+              <div className="grid items-start gap-3 md:grid-cols-[240px_16px_1fr]">
+                <span className="font-semibold text-gray-900">Beneficiaries / Project Locale</span>
+                <span className="font-semibold text-gray-500">:</span>
+                <input className={inputClassName} placeholder="e.g., Alegria, Tuburan, Cebu" />
+              </div>
+              <div className="grid items-start gap-3 md:grid-cols-[240px_16px_1fr]">
+                <span className="font-semibold text-gray-900">No. of Training Hours</span>
+                <span className="font-semibold text-gray-500">:</span>
+                <input className={inputClassName} placeholder="e.g., 48 hours" />
+              </div>
+              <div className="grid items-start gap-3 md:grid-cols-[240px_16px_1fr]">
+                <span className="font-semibold text-gray-900">No. of Beneficiaries</span>
+                <span className="font-semibold text-gray-500">:</span>
+                <input className={inputClassName} placeholder="e.g., 20 homeowners (11 Female / 9 Male)" />
+              </div>
+              <div className="grid items-start gap-3 md:grid-cols-[240px_16px_1fr]">
+                <span className="font-semibold text-gray-900">Total Project Cost</span>
+                <span className="font-semibold text-gray-500">:</span>
+                <input className={inputClassName} placeholder="e.g., ₱93,500.00" />
+              </div>
+              <div className="grid items-start gap-3 md:grid-cols-[240px_16px_1fr]">
+                <span className="font-semibold text-gray-900">Implementing Curricular Program/s</span>
+                <span className="font-semibold text-gray-500">:</span>
+                <textarea
+                  className={`${textareaClassName} min-h-[72px]`}
+                  placeholder="List the curricular programs involved (e.g., BS in Information Technology, Bachelor in Industrial Technology)"
+                />
+              </div>
+              <div className="grid items-start gap-3 md:grid-cols-[240px_16px_1fr]">
+                <span className="font-semibold text-gray-900">Implementing Partner/s</span>
+                <span className="font-semibold text-gray-500">:</span>
+                <textarea
+                  className={`${textareaClassName} min-h-[72px]`}
+                  placeholder="Name partner organizations (e.g., Mindanao Coalition of Power Consumers, Barangay Council)"
+                />
+              </div>
             </div>
-
-            <div>
-              <h4 className="text-sm font-semibold uppercase tracking-wide text-gray-900">Legend</h4>
-              <p className="text-xs text-gray-500">Indicate the projected range of beneficiaries covered by this project.</p>
-              <div className="mt-2 flex flex-wrap gap-3 text-sm text-gray-700">
-                {["1 – 25 beneficiaries", "26 – 50 beneficiaries", "51 – 75 beneficiaries", "76 – 100 beneficiaries"].map(
-                  (label) => (
-                    <label key={label} className="flex items-center gap-2">
+            <div className="space-y-2">
+              <div className="flex items-center gap-2 text-sm font-semibold text-gray-900">
+                <span>Extension Agenda</span>
+                <span className="text-gray-500">:</span>
+              </div>
+              <div className="grid gap-px rounded border border-yellow-200 bg-yellow-200 text-sm text-gray-700 sm:grid-cols-5">
+                {['1 - LAMESA', '2 - LIMPYU', '3 - LIKOP', '4 - LISTA', '5 - LAMBO', '6 - LAGSIK', '7 - LAMDOG', '8 - LIHOK', '9 - LAMIGIT', '10 - LOKAL'].map(
+                  (agenda) => (
+                    <label
+                      key={agenda}
+                      className="flex items-center gap-2 bg-white px-3 py-2"
+                    >
                       <input
                         type="checkbox"
                         className="h-4 w-4 rounded border-yellow-300 text-yellow-500 focus:ring-yellow-400"
                       />
-                      <span>{label}</span>
+                      <span className="whitespace-nowrap">{agenda}</span>
                     </label>
                   ),
                 )}
@@ -118,98 +133,81 @@ export default function ProjectLeaderProjectsPage() {
         ),
       },
       {
-        id: 'previous-phase-evaluation',
-        label: 'II. Project Evaluation (Previous Phase)',
-        content: (
-          <div className="space-y-5">
-            <p className="text-sm text-gray-600">
-              Summarize accomplishments, gaps, and lessons from the previous implementation cycle as the basis for the new
-              phase proposal.
-            </p>
-            <ul className="list-disc space-y-2 pl-6 text-sm text-gray-600">
-              <li>Highlight completed deliverables and the extent to which objectives were achieved.</li>
-              <li>Discuss milestone activities and the level of beneficiary participation in each.</li>
-              <li>Identify implementation gaps, bottlenecks, and constraints that affected delivery.</li>
-              <li>Describe recommendations or action points that will strengthen the succeeding phase.</li>
-            </ul>
-            <div className="space-y-4">
-              <label className="flex flex-col gap-1 text-sm font-medium text-gray-900">
-                Narrative of Accomplishments
-                <textarea
-                  className={textareaClassName}
-                  rows={6}
-                  placeholder="Provide a narrative of completed activities, outputs, and immediate outcomes."
-                />
-              </label>
-              <label className="flex flex-col gap-1 text-sm font-medium text-gray-900">
-                Key Challenges Encountered
-                <textarea
-                  className={textareaClassName}
-                  rows={4}
-                  placeholder="Discuss operational or contextual challenges from the previous phase."
-                />
-              </label>
-              <label className="flex flex-col gap-1 text-sm font-medium text-gray-900">
-                Recommendations for the Next Phase
-                <textarea
-                  className={textareaClassName}
-                  rows={4}
-                  placeholder="Outline corrective measures, strategic adjustments, and support required."
-                />
-              </label>
-            </div>
-          </div>
-        ),
-      },
-      {
         id: 'rationale',
-        label: 'III. Rationale of the Project',
+        label: 'II. Rationale of the Project',
         content: (
           <div className="space-y-6">
             <p className="text-sm text-gray-600">
               Provide the compelling justification for the project using the required subsections. Address the need, its
               significance, and the intended solution.
             </p>
-            <div className="grid gap-6">
-              <div className="space-y-2">
+            <div className="space-y-6">
+              <section className="space-y-2">
                 <h4 className="text-sm font-semibold text-gray-900">A. Statement of Need</h4>
                 <textarea
-                  className={`${textareaClassName} min-h-[220px]`}
-                  rows={10}
+                  className={`${textareaClassName} min-h-[200px]`}
                   placeholder="Explain the core problem or unmet need of your target beneficiaries."
                 />
-              </div>
-              <div className="space-y-2">
+              </section>
+              <section className="space-y-2">
                 <h4 className="text-sm font-semibold text-gray-900">B. Relevance of Need</h4>
                 <textarea
-                  className={`${textareaClassName} min-h-[200px]`}
-                  rows={8}
+                  className={`${textareaClassName} min-h-[180px]`}
                   placeholder="Justify why the institution must respond to this need at this time."
                 />
-              </div>
-              <div className="space-y-2">
+              </section>
+              <section className="space-y-2">
                 <h4 className="text-sm font-semibold text-gray-900">C. Beneficiary Profile</h4>
                 <textarea
-                  className={`${textareaClassName} min-h-[200px]`}
-                  rows={8}
+                  className={`${textareaClassName} min-h-[180px]`}
                   placeholder="Describe the demographics, socio-economic background, and readiness of the beneficiaries."
                 />
-              </div>
-              <div className="space-y-2">
-                <h4 className="text-sm font-semibold text-gray-900">D. Proposed Solution</h4>
+              </section>
+              <section className="space-y-3">
+                <h4 className="text-sm font-semibold text-gray-900">D. Research Basis</h4>
                 <textarea
-                  className={`${textareaClassName} min-h-[220px]`}
-                  rows={10}
+                  className={`${textareaClassName} min-h-[160px]`}
+                  placeholder="Summarize the studies, FGDs, or surveys that justify the proposed interventions."
+                />
+                <div className="space-y-2">
+                  <p className="text-sm font-medium text-gray-900">The table below shows a snapshot of the FGD:</p>
+                  <p className="text-sm text-gray-600">Number of respondents – 30</p>
+                  <div className="overflow-x-auto">
+                    <table className="w-full min-w-[640px] border border-yellow-200 text-sm text-gray-700">
+                      <thead>
+                        <tr>
+                          <th className={tableHeadCellClassName}>Questions</th>
+                          <th className={`${tableHeadCellClassName} text-center`}>Yes</th>
+                          <th className={`${tableHeadCellClassName} text-center`}>No</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {respondentSurveyQuestions.map((_, index) => (
+                          <tr key={`rationale-fgd-row-${index}`}>
+                            <td {...editableCellProps} className={tableCellClassName}></td>
+                            <td {...editableCellProps} className={`${tableCellClassName} text-center`}></td>
+                            <td {...editableCellProps} className={`${tableCellClassName} text-center`}></td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </section>
+              <section className="space-y-2">
+                <h4 className="text-sm font-semibold text-gray-900">E. Proposed Solution</h4>
+                <textarea
+                  className={`${textareaClassName} min-h-[200px]`}
                   placeholder="Outline the specific interventions you will implement to address the identified need."
                 />
-              </div>
+              </section>
             </div>
           </div>
         ),
       },
       {
         id: 'goals-objectives',
-        label: 'IV. Goals, Objectives & Intended Outcomes',
+        label: 'III. Goals, Objectives & Intended Outcomes',
         content: (
           <div className="space-y-6">
             <p className="text-sm text-gray-600">
@@ -222,17 +220,31 @@ export default function ProjectLeaderProjectsPage() {
                 <table className="w-full min-w-[640px] border border-yellow-200 text-sm text-gray-700">
                   <thead>
                     <tr>
-                      <th className={`${tableHeadCellClassName} text-center`} colSpan={3}>
+                      <th className={`${tableHeadCellClassName} text-center`} colSpan={esdGoalColumns * 2}>
                         Goals/Objectives/Intended Outcomes (follow the required sequence)
                       </th>
                     </tr>
                   </thead>
                   <tbody>
-                    {Array.from({ length: 3 }).map((_, rowIndex) => (
+                    {Array.from({ length: Math.ceil(esdGoalCount / esdGoalColumns) }).map((_, rowIndex) => (
                       <tr key={`esd-goal-row-${rowIndex}`} className="align-top">
-                        {Array.from({ length: 6 }).map((__, colIndex) => (
-                          <td key={`esd-goal-cell-${rowIndex}-${colIndex}`} {...editableCellProps} className={tableCellClassName}></td>
-                        ))}
+                        {Array.from({ length: esdGoalColumns }).map((__, colIndex) => {
+                          const goalIndex = rowIndex * esdGoalColumns + colIndex;
+                          const withinRange = goalIndex < esdGoalCount;
+                          return (
+                            <Fragment key={`esd-goal-fragment-${rowIndex}-${colIndex}`}>
+                              <td {...editableCellProps} className={tableCellClassName}></td>
+                              <td className={`${tableCellClassName} text-center`}>
+                                {withinRange ? (
+                                  <input
+                                    type="checkbox"
+                                    className="h-4 w-4 rounded border-yellow-300 text-yellow-500 focus:ring-yellow-400"
+                                  />
+                                ) : null}
+                              </td>
+                            </Fragment>
+                          );
+                        })}
                       </tr>
                     ))}
                   </tbody>
@@ -261,75 +273,23 @@ export default function ProjectLeaderProjectsPage() {
                 </ol>
               </div>
             </div>
-            <div className="rounded-lg border border-yellow-200 bg-yellow-50 p-4 text-sm text-yellow-800">
-              <p className="font-semibold">Guidance</p>
-              <p>
-                List each SMART objective with its success indicators, baseline, data-gathering methods, frequency, expected
-                actual output, means of verification, and remarks. Use additional rows as needed.
-              </p>
-            </div>
-            <div className="overflow-x-auto">
-              <table className="w-full min-w-[960px] border border-yellow-200 text-sm text-gray-700">
-                <thead>
-                  <tr>
-                    <th className={tableHeadCellClassName}>Objectives</th>
-                    <th className={tableHeadCellClassName}>Success Indicators</th>
-                    <th className={tableHeadCellClassName}>Baseline Data</th>
-                    <th className={tableHeadCellClassName}>Method of Data Gathering</th>
-                    <th className={tableHeadCellClassName}>Frequency</th>
-                    <th className={tableHeadCellClassName}>Actual Output / Outcome</th>
-                    <th className={tableHeadCellClassName}>Means of Verification</th>
-                    <th className={tableHeadCellClassName}>Remarks</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {Array.from({ length: 5 }).map((_, index) => (
-                    <tr key={`goals-row-${index}`}>
-                      <td {...editableCellProps} className={tableCellClassName}></td>
-                      <td {...editableCellProps} className={tableCellClassName}></td>
-                      <td {...editableCellProps} className={tableCellClassName}></td>
-                      <td {...editableCellProps} className={tableCellClassName}></td>
-                      <td {...editableCellProps} className={tableCellClassName}></td>
-                      <td {...editableCellProps} className={tableCellClassName}></td>
-                      <td {...editableCellProps} className={tableCellClassName}></td>
-                      <td {...editableCellProps} className={tableCellClassName}></td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
           </div>
         ),
       },
       {
         id: 'implementation-plan',
-        label: 'V. Implementation Plan',
+        label: 'IV. Implementation Plan',
         content: (
           <div className="space-y-6">
-            <p className="text-sm text-gray-600">
-              Provide the duration, general plan, and specific strategies for delivering the extension project.
-            </p>
-            <div className="space-y-4">
-              <label className="flex flex-col gap-1 text-sm font-medium text-gray-900">
-                A. Duration & General Plan
-                <textarea
-                  className={textareaClassName}
-                  rows={4}
-                  placeholder="Indicate the months and major milestones that will cover the entire project duration."
-                />
-              </label>
-              <label className="flex flex-col gap-1 text-sm font-medium text-gray-900">
-                B. Implementation Strategies
-                <textarea
-                  className={textareaClassName}
-                  rows={4}
-                  placeholder="Discuss the strategies, learning resources, and partnerships that will ensure effective delivery."
-                />
-              </label>
-            </div>
-
-            <div className="space-y-2">
-              <h4 className="text-sm font-semibold text-gray-900">C. Implementation Plan Table</h4>
+            <section className="space-y-2">
+              <h4 className="text-sm font-semibold text-gray-900">A. Extension Delivery Mode</h4>
+              <textarea
+                className={`${textareaClassName} min-h-[160px]`}
+                placeholder="Describe where sessions will be held, delivery formats, learning materials, and support plans for beneficiaries."
+              />
+            </section>
+            <section className="space-y-3">
+              <h4 className="text-sm font-semibold text-gray-900">B. Implementation Plan</h4>
               <div className="overflow-x-auto">
                 <table className="w-full min-w-[1080px] border border-yellow-200 text-sm text-gray-700">
                   <thead>
@@ -349,7 +309,7 @@ export default function ProjectLeaderProjectsPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {Array.from({ length: 8 }).map((_, index) => (
+                    {Array.from({ length: 9 }).map((_, index) => (
                       <tr key={`implementation-row-${index}`}>
                         <td {...editableCellProps} className={tableCellClassName}></td>
                         <td {...editableCellProps} className={tableCellClassName}></td>
@@ -368,41 +328,42 @@ export default function ProjectLeaderProjectsPage() {
                   </tbody>
                 </table>
               </div>
-              <p className="text-xs text-gray-500">
-                Note: Mark the months when activities occur, and update the status and remarks as implementation progresses.
-              </p>
-            </div>
+            </section>
           </div>
         ),
       },
       {
         id: 'monitoring-evaluation',
-        label: 'VI. Monitoring & Evaluation Plan',
+        label: 'V. Monitoring & Evaluation Plan',
         content: (
           <div className="space-y-4">
             <p className="text-sm text-gray-600">
-              Outline how progress and results will be measured during and after implementation. Include both qualitative
-              and quantitative indicators.
+              Track objectives against success indicators, baseline data, data-gathering methods, and verification tools. Use
+              the table to document frequency, outcomes, and remarks for each objective.
             </p>
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[960px] border border-yellow-200 text-sm text-gray-700">
+              <table className="w-full min-w-[1024px] border border-yellow-200 text-sm text-gray-700">
                 <thead>
                   <tr>
-                    <th className={tableHeadCellClassName}>Name</th>
-                    <th className={`${tableHeadCellClassName} text-center`}>Male</th>
-                    <th className={`${tableHeadCellClassName} text-center`}>Female</th>
-                    <th className={`${tableHeadCellClassName} text-center`}>All Gender</th>
-                    <th className={tableHeadCellClassName}>Role</th>
-                    <th className={tableHeadCellClassName}>Responsibility</th>
+                    <th className={tableHeadCellClassName}>Objectives</th>
+                    <th className={tableHeadCellClassName}>Success Indicators</th>
+                    <th className={tableHeadCellClassName}>Baseline Data</th>
+                    <th className={tableHeadCellClassName}>Method of Data Gathering</th>
+                    <th className={tableHeadCellClassName}>Frequency</th>
+                    <th className={tableHeadCellClassName}>Actual Output / Outcome</th>
+                    <th className={tableHeadCellClassName}>Means of Verification</th>
+                    <th className={tableHeadCellClassName}>Remarks</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {Array.from({ length: 8 }).map((_, index) => (
+                  {Array.from({ length: 6 }).map((_, index) => (
                     <tr key={`me-row-${index}`}>
                       <td {...editableCellProps} className={tableCellClassName}></td>
+                      <td {...editableCellProps} className={tableCellClassName}></td>
+                      <td {...editableCellProps} className={tableCellClassName}></td>
+                      <td {...editableCellProps} className={tableCellClassName}></td>
                       <td {...editableCellProps} className={`${tableCellClassName} text-center`}></td>
-                      <td {...editableCellProps} className={`${tableCellClassName} text-center`}></td>
-                      <td {...editableCellProps} className={`${tableCellClassName} text-center`}></td>
+                      <td {...editableCellProps} className={tableCellClassName}></td>
                       <td {...editableCellProps} className={tableCellClassName}></td>
                       <td {...editableCellProps} className={tableCellClassName}></td>
                     </tr>
@@ -415,55 +376,94 @@ export default function ProjectLeaderProjectsPage() {
       },
       {
         id: 'organizational-capability',
-        label: 'VII. Organizational Capability',
+        label: 'VI. Organizational Capability',
         content: (
           <div className="space-y-4">
             <p className="text-sm text-gray-600">
               Present the organization&apos;s capability to deliver the proposed project in paragraph form, addressing the
               guide questions provided in the template.
             </p>
-            <ol className="list-decimal space-y-2 pl-6 text-sm text-gray-700">
-              <li>What edge or unique capacity does your extension team have to implement this project?</li>
-              <li>How will faculty advisers, extensionists, or experts coordinate with student volunteers?</li>
-              <li>Identify linkages or partner organizations and describe how each will complement the project.</li>
-            </ol>
-            <textarea
-              className={textareaClassName}
-              rows={6}
-              placeholder="Compose the organizational capability narrative here."
-            />
+            <div className="space-y-3 text-sm text-gray-700">
+              <p>
+                The College of Technology is composed of technically abled professionals who are skilled and experienced in
+                the field. The team is comprised of electrical and electronics engineers as well as practicing electronics,
+                drafting, and IT professionals who are able to deliver the required training and achieve the desired results.
+                Furthermore, the students taking up BIT-Electrical, BIT-Electronics, and Information Technology will be very
+                essential toward the success of the training and the workshops.
+              </p>
+              <p>
+                The project leader, Engr. Naomi A. Buwa, has been an advocate of clean energy and is the primary contact
+                person of the Mindanao Coalition of Power Consumers. She is a Professional Electronics Engineer. Engr. Ramon
+                Conopio and Engr. Joy Cubillo are both Electrical Engineers, experts in electrical design and currently active
+                in the field. Prof. Victor Eboña is a TESDA-accredited expert in consumer electronics and is currently
+                involved in sustainable power utilization. Engr. Fernando Sullano is an electronics and IT specialist with
+                extensive experience in both wire and wireless technologies, as well as consumer electronics. Dr. James Paul
+                Tampao is a master draftsman who is the go-to person for designs as well as technical drawings.
+              </p>
+              <p>
+                At the heart of the team are IT experts who are in charge of the multimedia and creative works needed in the
+                delivery of the training and workshops.
+              </p>
+            </div>
           </div>
         ),
       },
       {
         id: 'community-extension-team',
-        label: 'VIII. Community Extension Team',
+        label: 'VII. Community Extension Team',
         content: (
           <div className="space-y-4">
             <p className="text-sm text-gray-600">
               List all members of the community extension team and specify their roles and responsibilities.
             </p>
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[720px] border border-yellow-200 text-sm text-gray-700">
+              <table className="w-full min-w-[840px] border border-yellow-200 text-sm text-gray-700">
                 <thead>
                   <tr>
-                    <th className={tableHeadCellClassName}>#</th>
-                    <th className={tableHeadCellClassName}>Name</th>
-                    <th className={tableHeadCellClassName}>Male</th>
-                    <th className={tableHeadCellClassName}>Female</th>
-                    <th className={tableHeadCellClassName}>All Gender</th>
-                    <th className={tableHeadCellClassName}>Role</th>
-                    <th className={tableHeadCellClassName}>Responsibility</th>
+                    <th className={tableHeadCellClassName} rowSpan={2}>
+                      Name
+                    </th>
+                    <th className={`${tableHeadCellClassName} text-center`} colSpan={3}>
+                      Gender
+                    </th>
+                    <th className={tableHeadCellClassName} rowSpan={2}>
+                      Role
+                    </th>
+                    <th className={tableHeadCellClassName} rowSpan={2}>
+                      Responsibility
+                    </th>
+                  </tr>
+                  <tr>
+                    <th className={`${tableHeadCellClassName} text-center`}>Male</th>
+                    <th className={`${tableHeadCellClassName} text-center`}>Female</th>
+                    <th className={`${tableHeadCellClassName} text-center`}>
+                      All Gender <span className="block text-[11px] font-normal">(Please specify)</span>
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
                   {Array.from({ length: 10 }).map((_, index) => (
                     <tr key={`team-row-${index}`}>
-                      <td {...editableCellProps} className={`${tableCellClassName} text-center`}>{index + 1}</td>
                       <td {...editableCellProps} className={tableCellClassName}></td>
-                      <td {...editableCellProps} className={`${tableCellClassName} text-center`}></td>
-                      <td {...editableCellProps} className={`${tableCellClassName} text-center`}></td>
-                      <td {...editableCellProps} className={`${tableCellClassName} text-center`}></td>
+                      <td className={`${tableCellClassName} text-center`}>
+                        <input
+                          type="checkbox"
+                          className="h-4 w-4 rounded border-yellow-300 text-yellow-500 focus:ring-yellow-400"
+                        />
+                      </td>
+                      <td className={`${tableCellClassName} text-center`}>
+                        <input
+                          type="checkbox"
+                          className="h-4 w-4 rounded border-yellow-300 text-yellow-500 focus:ring-yellow-400"
+                        />
+                      </td>
+                      <td className={tableCellClassName}>
+                        <input
+                          className={`${inputClassName} h-8`}
+                          placeholder="Specify"
+                          type="text"
+                        />
+                      </td>
                       <td {...editableCellProps} className={tableCellClassName}></td>
                       <td {...editableCellProps} className={tableCellClassName}></td>
                     </tr>
@@ -480,7 +480,7 @@ export default function ProjectLeaderProjectsPage() {
       },
       {
         id: 'sustainability-plan',
-        label: 'IX. Sustainability Plan',
+        label: 'VIII. Sustainability Plan',
         content: (
           <div className="space-y-4">
             <p className="text-sm text-gray-600">
@@ -505,7 +505,7 @@ export default function ProjectLeaderProjectsPage() {
       },
       {
         id: 'budgetary-requirement',
-        label: 'X. Budgetary Requirement',
+        label: 'IX. Budgetary Requirement',
         content: (
           <div className="space-y-4">
             <div className="space-y-2 text-sm text-gray-600">
@@ -524,176 +524,272 @@ export default function ProjectLeaderProjectsPage() {
                 </li>
               </ul>
             </div>
-            <div className="space-y-4">
-              {[{ label: 'A. Training Expenses', rows: 8 }, { label: 'B. Office Supplies', rows: 6 }].map(({ label, rows }) => (
-                <div key={label} className="space-y-3">
-                  <h4 className="text-sm font-semibold text-gray-900">{label}</h4>
-                  <div className="overflow-x-auto">
-                    <table className="w-full min-w-[768px] border border-yellow-200 text-sm text-gray-700">
-                      <thead>
-                        <tr>
-                          <th className={tableHeadCellClassName}>Description</th>
-                          <th className={`${tableHeadCellClassName} text-center`}>Quantity</th>
-                          <th className={tableHeadCellClassName}>Unit</th>
-                          <th className={`${tableHeadCellClassName} text-right`}>Unit Cost (₱)</th>
-                          <th className={`${tableHeadCellClassName} text-right`}>Total Cost (₱)</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {Array.from({ length: rows }).map((_, index) => (
-                          <tr key={`${label}-row-${index}`}>
-                            <td {...editableCellProps} className={tableCellClassName}></td>
-                            <td {...editableCellProps} className={`${tableCellClassName} text-center`}></td>
-                            <td {...editableCellProps} className={tableCellClassName}></td>
-                            <td {...editableCellProps} className={`${tableCellClassName} text-right`}></td>
-                            <td {...editableCellProps} className={`${tableCellClassName} text-right`}></td>
-                          </tr>
+            <div className="space-y-6">
+              <section className="space-y-3">
+                <h4 className="text-sm font-semibold text-gray-900">A. Training Expenses</h4>
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[800px] border border-yellow-200 text-sm text-gray-700">
+                    <thead>
+                      <tr>
+                        {['Description', 'Quantity', 'Unit', 'Unit Cost (₱)', 'Total Cost (₱)'].map((heading) => (
+                          <th
+                            key={`training-heading-${heading}`}
+                            className={`${tableHeadCellClassName} ${heading.includes('Cost') ? 'text-right' : heading === 'Quantity' ? 'text-center' : ''}`}
+                          >
+                            {heading}
+                          </th>
                         ))}
-                        <tr>
-                          <td {...editableCellProps} className={`font-semibold text-gray-900 ${tableCellClassName}`}>Sub-total</td>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {Array.from({ length: 6 }).map((_, index) => (
+                        <tr key={`training-row-${index}`}>
+                          <td {...editableCellProps} className={tableCellClassName}></td>
                           <td {...editableCellProps} className={`${tableCellClassName} text-center`}></td>
                           <td {...editableCellProps} className={tableCellClassName}></td>
                           <td {...editableCellProps} className={`${tableCellClassName} text-right`}></td>
-                          <td {...editableCellProps} className={`${tableCellClassName} text-right font-semibold text-gray-900`}></td>
+                          <td {...editableCellProps} className={`${tableCellClassName} text-right`}></td>
                         </tr>
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              ))}
-              <div className="flex justify-end">
-                <div className="overflow-x-auto">
-                  <table className="min-w-[320px] border border-yellow-200 text-sm text-gray-700">
-                    <tbody>
+                      ))}
                       <tr>
-                        <td {...editableCellProps} className={`font-semibold text-gray-900 ${tableCellClassName}`}>Grand Total</td>
+                        <td {...editableCellProps} className={`font-semibold text-gray-900 ${tableCellClassName}`}>Sub-total</td>
+                        <td {...editableCellProps} className={`${tableCellClassName} text-center`}></td>
+                        <td {...editableCellProps} className={tableCellClassName}></td>
+                        <td {...editableCellProps} className={`${tableCellClassName} text-right`}></td>
+                        <td {...editableCellProps} className={`${tableCellClassName} text-right`}></td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </section>
+
+              <section className="space-y-3">
+                <h4 className="text-sm font-semibold text-gray-900">B. Office Supplies</h4>
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[800px] border border-yellow-200 text-sm text-gray-700">
+                    <thead>
+                      <tr>
+                        {['Description', 'Quantity', 'Unit', 'Unit Cost (₱)', 'Total Cost (₱)'].map((heading) => (
+                          <th
+                            key={`office-heading-${heading}`}
+                            className={`${tableHeadCellClassName} ${heading.includes('Cost') ? 'text-right' : heading === 'Quantity' ? 'text-center' : ''}`}
+                          >
+                            {heading}
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {Array.from({ length: 6 }).map((_, index) => (
+                        <tr key={`office-row-${index}`}>
+                          <td {...editableCellProps} className={tableCellClassName}></td>
+                          <td {...editableCellProps} className={`${tableCellClassName} text-center`}></td>
+                          <td {...editableCellProps} className={tableCellClassName}></td>
+                          <td {...editableCellProps} className={`${tableCellClassName} text-right`}></td>
+                          <td {...editableCellProps} className={`${tableCellClassName} text-right`}></td>
+                        </tr>
+                      ))}
+                      <tr>
+                        <td {...editableCellProps} className={`font-semibold text-gray-900 ${tableCellClassName}`}>Sub-total</td>
+                        <td {...editableCellProps} className={`${tableCellClassName} text-center`}></td>
+                        <td {...editableCellProps} className={tableCellClassName}></td>
+                        <td {...editableCellProps} className={`${tableCellClassName} text-right`}></td>
+                        <td {...editableCellProps} className={`${tableCellClassName} text-right`}></td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </section>
+
+              <section className="space-y-3">
+                <h4 className="text-sm font-semibold text-gray-900">C. Other Expenses</h4>
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[800px] border border-yellow-200 text-sm text-gray-700">
+                    <thead>
+                      <tr>
+                        {['Description', 'Quantity / Unit', 'Unit Cost (₱)', 'Amount (₱)'].map((heading) => (
+                          <th
+                            key={`other-heading-${heading}`}
+                            className={`${tableHeadCellClassName} ${heading.includes('Cost') || heading.includes('Amount') ? 'text-right' : ''}`}
+                          >
+                            {heading}
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {Array.from({ length: 6 }).map((_, index) => (
+                        <tr key={`other-row-${index}`}>
+                          <td {...editableCellProps} className={tableCellClassName}></td>
+                          <td {...editableCellProps} className={tableCellClassName}></td>
+                          <td {...editableCellProps} className={`${tableCellClassName} text-right`}></td>
+                          <td {...editableCellProps} className={`${tableCellClassName} text-right`}></td>
+                        </tr>
+                      ))}
+                      <tr>
+                        <td {...editableCellProps} className={`font-semibold text-gray-900 ${tableCellClassName}`}>Sub-total</td>
+                        <td {...editableCellProps} className={tableCellClassName}></td>
+                        <td {...editableCellProps} className={`${tableCellClassName} text-right`}></td>
+                        <td {...editableCellProps} className={`${tableCellClassName} text-right`}></td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </section>
+
+              <section className="space-y-3">
+                <h4 className="text-sm font-semibold text-gray-900">Total Budgetary Requirements</h4>
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[480px] border border-yellow-200 text-sm text-gray-700">
+                    <tbody>
+                      {['A. Training Expenses', 'B. Office Supplies', 'C. Other Expenses'].map((category) => (
+                        <tr key={`budget-summary-${category}`}>
+                          <td {...editableCellProps} className={`font-medium text-gray-900 ${tableCellClassName}`}>{category}</td>
+                          <td {...editableCellProps} className={`${tableCellClassName} text-right`}></td>
+                        </tr>
+                      ))}
+                      <tr>
+                        <td {...editableCellProps} className={`font-semibold uppercase text-gray-900 ${tableCellClassName}`}>
+                          Total
+                        </td>
                         <td {...editableCellProps} className={`${tableCellClassName} text-right font-semibold text-gray-900`}></td>
                       </tr>
                     </tbody>
                   </table>
                 </div>
-              </div>
-            </div>
-            <div className="space-y-3">
-              <h4 className="text-sm font-semibold text-gray-900">Number of Respondents – 30</h4>
-              <div className="overflow-x-auto">
-                <table className="w-full min-w-[640px] border border-yellow-200 text-sm text-gray-700">
-                  <thead>
-                    <tr>
-                      <th className={tableHeadCellClassName}>Questions</th>
-                      <th className={`${tableHeadCellClassName} text-center`}>Yes</th>
-                      <th className={`${tableHeadCellClassName} text-center`}>No</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {respondentSurveyQuestions.map((_, index) => (
-                      <tr key={`respondent-question-${index}`}>
-                        <td {...editableCellProps} className={tableCellClassName}></td>
-                        <td className={`${tableCellClassName} text-center`}>
-                          <label className="inline-flex items-center justify-center gap-2">
-                            <input
-                              type="checkbox"
-                              className="h-4 w-4 rounded border-yellow-300 text-yellow-500 focus:ring-yellow-400"
-                              aria-label="Yes"
-                            />
-                          </label>
-                        </td>
-                        <td className={`${tableCellClassName} text-center`}>
-                          <label className="inline-flex items-center justify-center gap-2">
-                            <input
-                              type="checkbox"
-                              className="h-4 w-4 rounded border-yellow-300 text-yellow-500 focus:ring-yellow-400"
-                              aria-label="No"
-                            />
-                          </label>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+              </section>
             </div>
           </div>
         ),
       },
       {
         id: 'endorsements',
-        label: 'XI. Endorsements & Attachments',
+        label: 'X. Endorsements & Attachments',
         content: (
           <div className="space-y-6 text-sm text-gray-700">
-            <div className="space-y-3">
+            <section className="space-y-2">
               <h4 className="text-base font-semibold text-gray-900">Prepared by</h4>
-              <p className="text-xs text-gray-500">
-                All members of the team (except for your students) should sign to indicate commitment to the assigned
-                roles.
-              </p>
-              <div className="grid gap-2 md:grid-cols-2">
-                {Array.from({ length: 6 }).map((_, index) => (
-                  <div
-                    key={`prepared-by-${index}`}
-                    className="flex h-16 items-center justify-between rounded-lg border border-dashed border-yellow-300 px-3"
-                  >
-                    <span className="text-xs text-gray-500">Signature line</span>
-                    <span className="text-xs text-gray-400">Date</span>
-                  </div>
-                ))}
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[640px] border border-yellow-200">
+                  <thead>
+                    <tr>
+                      <th className={tableHeadCellClassName}>Name / Position</th>
+                      <th className={`${tableHeadCellClassName} text-center`}>Signature</th>
+                      <th className={`${tableHeadCellClassName} text-center`}>Date</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {Array.from({ length: 8 }).map((_, index) => (
+                      <tr key={`prepared-row-${index}`}>
+                        <td {...editableCellProps} className={tableCellClassName}></td>
+                        <td {...editableCellProps} className={`${tableCellClassName} text-center`}></td>
+                        <td {...editableCellProps} className={`${tableCellClassName} text-center`}></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
-            </div>
+            </section>
 
-            <div className="space-y-3">
+            <section className="space-y-2">
               <h4 className="text-base font-semibold text-gray-900">Reviewed and Verified By</h4>
-              <div className="space-y-2">
-                {['Extension Chairperson / Director', 'College Dean (for Main Campus only)', 'Campus Director'].map(
-                  (label) => (
-                    <div
-                      key={label}
-                      className="flex h-14 items-center justify-between rounded-lg border border-dashed border-yellow-300 px-3"
-                    >
-                      <span className="text-xs text-gray-500">{label}</span>
-                      <span className="text-xs text-gray-400">Signature / Date</span>
-                    </div>
-                  ),
-                )}
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[640px] border border-yellow-200">
+                  <thead>
+                    <tr>
+                      <th className={tableHeadCellClassName}>Name / Position</th>
+                      <th className={`${tableHeadCellClassName} text-center`}>Signature</th>
+                      <th className={`${tableHeadCellClassName} text-center`}>Date</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {['Extension Chairperson / Director', 'College Dean (for Main Campus only)', 'Campus Director'].map(
+                      (label) => (
+                        <tr key={`reviewed-row-${label}`}>
+                          <td {...editableCellProps} className={tableCellClassName}>{label}</td>
+                          <td {...editableCellProps} className={`${tableCellClassName} text-center`}></td>
+                          <td {...editableCellProps} className={`${tableCellClassName} text-center`}></td>
+                        </tr>
+                      ),
+                    )}
+                  </tbody>
+                </table>
               </div>
-            </div>
+            </section>
 
-            <div className="space-y-3">
+            <section className="space-y-2">
+              <h4 className="text-base font-semibold text-gray-900">Endorsed for BOR Approval</h4>
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[640px] border border-yellow-200">
+                  <thead>
+                    <tr>
+                      <th className={tableHeadCellClassName}>Name / Position</th>
+                      <th className={`${tableHeadCellClassName} text-center`}>Signature</th>
+                      <th className={`${tableHeadCellClassName} text-center`}>Date</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {Array.from({ length: 3 }).map((_, index) => (
+                      <tr key={`endorse-row-${index}`}>
+                        <td {...editableCellProps} className={tableCellClassName}></td>
+                        <td {...editableCellProps} className={`${tableCellClassName} text-center`}></td>
+                        <td {...editableCellProps} className={`${tableCellClassName} text-center`}></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+
+            <section className="space-y-2">
               <h4 className="text-base font-semibold text-gray-900">Extension Council Remarks</h4>
-              <div className="flex flex-wrap gap-4">
+              <div className="grid gap-2">
                 {['Deferred', 'For Revision', 'Endorsed for BOR Approval'].map((label) => (
-                  <label key={label} className="flex items-center gap-2 text-sm font-medium text-gray-900">
-                    <span className="flex h-5 w-5 items-center justify-center rounded border border-yellow-300">
-                      <span className="h-3 w-3 rounded bg-yellow-100" />
+                  <label key={label} className="flex items-center gap-3 text-sm font-medium text-gray-900">
+                    <input
+                      type="checkbox"
+                      className="h-4 w-4 rounded border-yellow-300 text-yellow-500 focus:ring-yellow-400"
+                    />
+                    <span {...editableCellProps} className="flex-1 rounded border border-yellow-200 px-3 py-1">
+                      {label}
                     </span>
-                    {label}
                   </label>
                 ))}
               </div>
-            </div>
+            </section>
 
-            <div className="space-y-3">
+            <section className="space-y-2">
               <h4 className="text-base font-semibold text-gray-900">Attachments</h4>
-              <ol className="list-decimal space-y-2 pl-6">
-                <li>Research Book</li>
-                <li>
-                  Extension Paper based on Community Need Assessment (CNA) &mdash; include executive summary of CNA findings,
-                  project impact, resulting solution, and recommendations of the extension consultation with partner
-                  beneficiaries.
-                </li>
-                <li>
-                  Terminal Report for Phase / Actual Project with impact evaluation and beneficiary data based on CNA.
-                </li>
-              </ol>
-              <p className="text-xs text-gray-500">
-                Note: Only complete project proposals will be accepted.
-              </p>
-            </div>
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[480px] border border-yellow-200">
+                  <thead>
+                    <tr>
+                      <th className={tableHeadCellClassName}>Document</th>
+                      <th className={`${tableHeadCellClassName} text-center`}>Included</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {Array.from({ length: 5 }).map((_, index) => (
+                      <tr key={`attachment-row-${index}`}>
+                        <td {...editableCellProps} className={tableCellClassName}></td>
+                        <td className={`${tableCellClassName} text-center`}>
+                          <input
+                            type="checkbox"
+                            className="h-4 w-4 rounded border-yellow-300 text-yellow-500 focus:ring-yellow-400"
+                          />
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </section>
           </div>
         ),
       },
       {
         id: 'training-design',
-        label: 'XII. Training Design',
+        label: 'XI. Training Design',
         content: (
           <div className="space-y-4">
             <div className="grid gap-4 md:grid-cols-2">
@@ -785,10 +881,10 @@ export default function ProjectLeaderProjectsPage() {
                 <Filter className="h-4 w-4" />
                 Filters
               </button>
-              <button className="flex items-center gap-2 rounded-lg border border-yellow-200 px-4 py-2 text-sm font-semibold text-yellow-600 hover:bg-yellow-50">
-                <CalendarDays className="h-4 w-4" />
-                Schedule View
-              </button>
+              {/* <button className="flex items-center gap-2 rounded-lg border border-yellow-200 px-4 py-2 text-sm font-semibold text-yellow-600 hover:bg-yellow-50">
+              <CalendarDays className="h-4 w-4" />
+              Schedule View
+            </button> */}
             </div>
           </div>
         </header>
@@ -805,10 +901,10 @@ export default function ProjectLeaderProjectsPage() {
                 <PlusCircle className="h-4 w-4" />
                 New Project
               </button>
-              <button className="flex items-center gap-2 rounded-lg border border-yellow-200 px-4 py-2 text-sm font-semibold text-yellow-600 hover:bg-yellow-50">
+              {/* <button className="flex items-center gap-2 rounded-lg border border-yellow-200 px-4 py-2 text-sm font-semibold text-yellow-600 hover:bg-yellow-50">
                 <Filter className="h-4 w-4" />
                 Import from template
-              </button>
+              </button> */}
             </div>
           </div>
         </section>
