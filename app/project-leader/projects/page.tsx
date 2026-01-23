@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState, useEffect, Fragment } from 'react';
+import { useMemo, useState, useEffect, useRef, Fragment } from 'react';
 import { usePathname } from 'next/navigation';
 import { PlusCircle, Filter, CalendarDays } from 'lucide-react';
 
@@ -12,9 +12,12 @@ const textareaClassName =
   'w-full rounded-lg border border-yellow-200 bg-white px-3 py-2 text-sm text-gray-900 focus:border-yellow-400 focus:outline-none focus:ring-2 focus:ring-yellow-200';
 const tableCellClassName = 'border border-yellow-200 px-3 py-2 align-top';
 const tableHeadCellClassName = 'border border-yellow-200 bg-yellow-100 px-3 py-2 text-left font-semibold text-gray-800';
+const tableHeadInputClassName =
+  'w-full rounded border border-transparent bg-transparent px-1 py-0.5 text-sm font-semibold text-gray-800 focus:border-yellow-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-yellow-200';
 const editableCellProps = { contentEditable: true, suppressContentEditableWarning: true } as const;
 const esdGoalCount = 17;
 const esdGoalColumns = 3;
+const implementationTimelineColumnCount = 7;
 const respondentSurveyQuestions = [
   { text: 'Nakataas ang bayranon sa kuryente?' },
   { text: 'Naay estudyante sa panimalay?' },
@@ -42,6 +45,70 @@ export default function ProjectLeaderProjectsPage() {
   const [panelMounted, setPanelMounted] = useState(false);
   const [panelVisible, setPanelVisible] = useState(false);
   const [activeSectionId, setActiveSectionId] = useState('project-summary');
+  const [fgdRowCount, setFgdRowCount] = useState(respondentSurveyQuestions.length);
+  const [implementationRowCount, setImplementationRowCount] = useState(9);
+  const [trainingExpensesRowCount, setTrainingExpensesRowCount] = useState(6);
+  const [officeSuppliesRowCount, setOfficeSuppliesRowCount] = useState(6);
+  const [otherExpensesRowCount, setOtherExpensesRowCount] = useState(6);
+  const [trainingDesignRowCount, setTrainingDesignRowCount] = useState(8);
+  const [trainingExpensesTotals, setTrainingExpensesTotals] = useState<Record<number, number>>({});
+  const [officeSuppliesTotals, setOfficeSuppliesTotals] = useState<Record<number, number>>({});
+  const [otherExpensesTotals, setOtherExpensesTotals] = useState<Record<number, number>>({});
+  const [trainingDesignHoursTotals, setTrainingDesignHoursTotals] = useState<Record<number, number>>({});
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [saveMessage, setSaveMessage] = useState<string | null>(null);
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  const [projects, setProjects] = useState<Array<{ _id: string; name: string; description: string; status?: string }>>([]);
+  const [projectsLoading, setProjectsLoading] = useState(false);
+  const [projectsError, setProjectsError] = useState<string | null>(null);
+  const [viewProjectId, setViewProjectId] = useState<string | null>(null);
+  const [viewProjectData, setViewProjectData] = useState<any | null>(null);
+
+  const trainingExpensesSubtotal = useMemo(() => {
+    let sum = 0;
+    for (let i = 0; i < trainingExpensesRowCount; i++) {
+      const value = trainingExpensesTotals[i] ?? 0;
+      if (!Number.isFinite(value)) continue;
+      sum += value;
+    }
+    return sum;
+  }, [trainingExpensesRowCount, trainingExpensesTotals]);
+
+  const officeSuppliesSubtotal = useMemo(() => {
+    let sum = 0;
+    for (let i = 0; i < officeSuppliesRowCount; i++) {
+      const value = officeSuppliesTotals[i] ?? 0;
+      if (!Number.isFinite(value)) continue;
+      sum += value;
+    }
+    return sum;
+  }, [officeSuppliesRowCount, officeSuppliesTotals]);
+
+  const otherExpensesSubtotal = useMemo(() => {
+    let sum = 0;
+    for (let i = 0; i < otherExpensesRowCount; i++) {
+      const value = otherExpensesTotals[i] ?? 0;
+      if (!Number.isFinite(value)) continue;
+      sum += value;
+    }
+    return sum;
+  }, [otherExpensesRowCount, otherExpensesTotals]);
+
+  const totalBudgetaryRequirements = useMemo(
+    () => trainingExpensesSubtotal + officeSuppliesSubtotal + otherExpensesSubtotal,
+    [trainingExpensesSubtotal, officeSuppliesSubtotal, otherExpensesSubtotal],
+  );
+
+  const trainingDesignHoursTotal = useMemo(() => {
+    let sum = 0;
+    for (let i = 0; i < trainingDesignRowCount; i++) {
+      const value = trainingDesignHoursTotals[i] ?? 0;
+      if (!Number.isFinite(value)) continue;
+      sum += value;
+    }
+    return sum;
+  }, [trainingDesignRowCount, trainingDesignHoursTotals]);
 
   const activeItem = useMemo(() => {
     return (
@@ -182,7 +249,7 @@ export default function ProjectLeaderProjectsPage() {
                         </tr>
                       </thead>
                       <tbody>
-                        {respondentSurveyQuestions.map((_, index) => (
+                        {Array.from({ length: fgdRowCount }).map((_, index) => (
                           <tr key={`rationale-fgd-row-${index}`}>
                             <td {...editableCellProps} className={tableCellClassName}></td>
                             <td {...editableCellProps} className={`${tableCellClassName} text-center`}></td>
@@ -191,6 +258,22 @@ export default function ProjectLeaderProjectsPage() {
                         ))}
                       </tbody>
                     </table>
+                  </div>
+                  <div className="mt-3 flex justify-end gap-2 text-xs">
+                    <button
+                      type="button"
+                      onClick={() => setFgdRowCount((count) => count + 1)}
+                      className="rounded-full border border-yellow-200 px-3 py-1 font-semibold text-yellow-700 transition hover:bg-yellow-50"
+                    >
+                      Add row
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setFgdRowCount((count) => (count > 1 ? count - 1 : 1))}
+                      className="rounded-full border border-yellow-200 px-3 py-1 font-semibold text-yellow-700 transition hover:bg-yellow-50"
+                    >
+                      Delete row
+                    </button>
                   </div>
                 </div>
               </section>
@@ -297,24 +380,25 @@ export default function ProjectLeaderProjectsPage() {
                       <th className={tableHeadCellClassName}>Objective</th>
                       <th className={tableHeadCellClassName}>Activities</th>
                       <th className={tableHeadCellClassName}>Person Responsible</th>
-                      <th className={`${tableHeadCellClassName} text-center`}>May 2023</th>
-                      <th className={`${tableHeadCellClassName} text-center`}>June 2023</th>
-                      <th className={`${tableHeadCellClassName} text-center`}>July 2023</th>
-                      <th className={`${tableHeadCellClassName} text-center`}>Aug 2023</th>
-                      <th className={`${tableHeadCellClassName} text-center`}>Sept 2023</th>
-                      <th className={`${tableHeadCellClassName} text-center`}>Oct 2023</th>
-                      <th className={`${tableHeadCellClassName} text-center`}>Nov 2023</th>
+                      {Array.from({ length: implementationTimelineColumnCount }).map((_, index) => (
+                        <th key={`timeline-month-${index}`} className={`${tableHeadCellClassName} text-center`}>
+                          <input
+                            type="text"
+                            className={`${tableHeadInputClassName} text-center`}
+                            placeholder={`Timeline ${index + 1}`}
+                          />
+                        </th>
+                      ))}
                       <th className={tableHeadCellClassName}>Status</th>
                       <th className={tableHeadCellClassName}>Remarks</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {Array.from({ length: 9 }).map((_, index) => (
+                    {Array.from({ length: implementationRowCount }).map((_, index) => (
                       <tr key={`implementation-row-${index}`}>
                         <td {...editableCellProps} className={tableCellClassName}></td>
                         <td {...editableCellProps} className={tableCellClassName}></td>
                         <td {...editableCellProps} className={tableCellClassName}></td>
-                        <td {...editableCellProps} className={`${tableCellClassName} text-center`}></td>
                         <td {...editableCellProps} className={`${tableCellClassName} text-center`}></td>
                         <td {...editableCellProps} className={`${tableCellClassName} text-center`}></td>
                         <td {...editableCellProps} className={`${tableCellClassName} text-center`}></td>
@@ -327,6 +411,26 @@ export default function ProjectLeaderProjectsPage() {
                     ))}
                   </tbody>
                 </table>
+              </div>
+              <div className="mt-3 flex justify-end gap-2 text-xs">
+                <button
+                  type="button"
+                  onClick={() => setImplementationRowCount((count) => count + 1)}
+                  className="rounded-full border border-yellow-200 px-3 py-1 font-semibold text-yellow-700 transition hover:bg-yellow-50"
+                >
+                  Add row
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setImplementationRowCount((count) => (count > 1 ? count - 1 : 1))}
+                  className="rounded-full border border-yellow-200 px-3 py-1 font-semibold text-yellow-700 transition hover:bg-yellow-50"
+                >
+                  Delete row
+                </button>
+              </div>
+              <div className="space-y-2 rounded-lg border border-yellow-200 bg-white p-4 text-sm text-gray-700">
+                <h5 className="font-semibold text-gray-900">Tips</h5>
+                <textarea className={`${textareaClassName} min-h-[120px]`} />
               </div>
             </section>
           </div>
@@ -379,32 +483,33 @@ export default function ProjectLeaderProjectsPage() {
         label: 'VI. Organizational Capability',
         content: (
           <div className="space-y-4">
-            <p className="text-sm text-gray-600">
-              Present the organization&apos;s capability to deliver the proposed project in paragraph form, addressing the
-              guide questions provided in the template.
-            </p>
-            <div className="space-y-3 text-sm text-gray-700">
-              <p>
-                The College of Technology is composed of technically abled professionals who are skilled and experienced in
-                the field. The team is comprised of electrical and electronics engineers as well as practicing electronics,
-                drafting, and IT professionals who are able to deliver the required training and achieve the desired results.
-                Furthermore, the students taking up BIT-Electrical, BIT-Electronics, and Information Technology will be very
-                essential toward the success of the training and the workshops.
-              </p>
-              <p>
-                The project leader, Engr. Naomi A. Buwa, has been an advocate of clean energy and is the primary contact
-                person of the Mindanao Coalition of Power Consumers. She is a Professional Electronics Engineer. Engr. Ramon
-                Conopio and Engr. Joy Cubillo are both Electrical Engineers, experts in electrical design and currently active
-                in the field. Prof. Victor Eboña is a TESDA-accredited expert in consumer electronics and is currently
-                involved in sustainable power utilization. Engr. Fernando Sullano is an electronics and IT specialist with
-                extensive experience in both wire and wireless technologies, as well as consumer electronics. Dr. James Paul
-                Tampao is a master draftsman who is the go-to person for designs as well as technical drawings.
-              </p>
-              <p>
-                At the heart of the team are IT experts who are in charge of the multimedia and creative works needed in the
-                delivery of the training and workshops.
-              </p>
-            </div>
+            {[{
+              label: 'A. Explain why your extension team is the best group to implement this project.',
+              placeholder: 'Describe what makes your team uniquely qualified to lead this initiative.',
+            },
+            {
+              label: 'B. What expertise do you bring to the project?',
+              placeholder: 'List key competencies, certifications, and relevant experience within your team.',
+            },
+            {
+              label:
+                'C. Describe your partner organizations/groups. Explain how you complement each other and why you have selected them as partners.',
+              placeholder: 'Outline partner roles, strengths, and the value each brings to the collaboration.',
+            },
+            {
+              label: 'D. Explain who will do what.',
+              placeholder: 'Map responsibilities across team members and partner organizations.',
+            },
+            ].map((item) => (
+              <label key={item.label} className="block space-y-2 text-sm text-gray-700">
+                <span className="font-medium text-gray-900">{item.label}</span>
+                <textarea
+                  className={textareaClassName}
+                  rows={5}
+                  placeholder={item.placeholder}
+                />
+              </label>
+            ))}
           </div>
         ),
       },
@@ -542,24 +647,62 @@ export default function ProjectLeaderProjectsPage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {Array.from({ length: 6 }).map((_, index) => (
+                      {Array.from({ length: trainingExpensesRowCount }).map((_, index) => (
                         <tr key={`training-row-${index}`}>
                           <td {...editableCellProps} className={tableCellClassName}></td>
                           <td {...editableCellProps} className={`${tableCellClassName} text-center`}></td>
                           <td {...editableCellProps} className={tableCellClassName}></td>
                           <td {...editableCellProps} className={`${tableCellClassName} text-right`}></td>
-                          <td {...editableCellProps} className={`${tableCellClassName} text-right`}></td>
+                          <td className={`${tableCellClassName} text-right`}>
+                            <input
+                              type="number"
+                              min={0}
+                              step="0.01"
+                              className="w-full border-none bg-transparent text-right text-sm text-gray-900 focus:outline-none focus:ring-0"
+                              onChange={(event) => {
+                                const raw = event.target.value.replace(/,/g, '');
+                                const parsed = parseFloat(raw);
+                                setTrainingExpensesTotals((prev) => ({
+                                  ...prev,
+                                  [index]: Number.isNaN(parsed) ? 0 : parsed,
+                                }));
+                              }}
+                            />
+                          </td>
                         </tr>
                       ))}
                       <tr>
-                        <td {...editableCellProps} className={`font-semibold text-gray-900 ${tableCellClassName}`}>Sub-total</td>
-                        <td {...editableCellProps} className={`${tableCellClassName} text-center`}></td>
-                        <td {...editableCellProps} className={tableCellClassName}></td>
-                        <td {...editableCellProps} className={`${tableCellClassName} text-right`}></td>
-                        <td {...editableCellProps} className={`${tableCellClassName} text-right`}></td>
+                        <td className={`font-semibold text-gray-900 ${tableCellClassName}`}>Sub-total</td>
+                        <td className={`${tableCellClassName} text-center`}></td>
+                        <td className={tableCellClassName}></td>
+                        <td className={`${tableCellClassName} text-right`}></td>
+                        <td className={`${tableCellClassName} text-right font-semibold text-gray-900`}>
+                          {trainingExpensesSubtotal > 0
+                            ? trainingExpensesSubtotal.toLocaleString('en-PH', {
+                                minimumFractionDigits: 2,
+                                maximumFractionDigits: 2,
+                              })
+                            : ''}
+                        </td>
                       </tr>
                     </tbody>
                   </table>
+                </div>
+                <div className="mt-3 flex justify-end gap-2 text-xs">
+                  <button
+                    type="button"
+                    onClick={() => setTrainingExpensesRowCount((count) => count + 1)}
+                    className="rounded-full border border-yellow-200 px-3 py-1 font-semibold text-yellow-700 transition hover:bg-yellow-50"
+                  >
+                    Add row
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setTrainingExpensesRowCount((count) => (count > 1 ? count - 1 : 1))}
+                    className="rounded-full border border-yellow-200 px-3 py-1 font-semibold text-yellow-700 transition hover:bg-yellow-50"
+                  >
+                    Delete row
+                  </button>
                 </div>
               </section>
 
@@ -580,24 +723,62 @@ export default function ProjectLeaderProjectsPage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {Array.from({ length: 6 }).map((_, index) => (
+                      {Array.from({ length: officeSuppliesRowCount }).map((_, index) => (
                         <tr key={`office-row-${index}`}>
                           <td {...editableCellProps} className={tableCellClassName}></td>
                           <td {...editableCellProps} className={`${tableCellClassName} text-center`}></td>
                           <td {...editableCellProps} className={tableCellClassName}></td>
                           <td {...editableCellProps} className={`${tableCellClassName} text-right`}></td>
-                          <td {...editableCellProps} className={`${tableCellClassName} text-right`}></td>
+                          <td className={`${tableCellClassName} text-right`}>
+                            <input
+                              type="number"
+                              min={0}
+                              step="0.01"
+                              className="w-full border-none bg-transparent text-right text-sm text-gray-900 focus:outline-none focus:ring-0"
+                              onChange={(event) => {
+                                const raw = event.target.value.replace(/,/g, '');
+                                const parsed = parseFloat(raw);
+                                setOfficeSuppliesTotals((prev) => ({
+                                  ...prev,
+                                  [index]: Number.isNaN(parsed) ? 0 : parsed,
+                                }));
+                              }}
+                            />
+                          </td>
                         </tr>
                       ))}
                       <tr>
-                        <td {...editableCellProps} className={`font-semibold text-gray-900 ${tableCellClassName}`}>Sub-total</td>
-                        <td {...editableCellProps} className={`${tableCellClassName} text-center`}></td>
-                        <td {...editableCellProps} className={tableCellClassName}></td>
-                        <td {...editableCellProps} className={`${tableCellClassName} text-right`}></td>
-                        <td {...editableCellProps} className={`${tableCellClassName} text-right`}></td>
+                        <td className={`font-semibold text-gray-900 ${tableCellClassName}`}>Sub-total</td>
+                        <td className={`${tableCellClassName} text-center`}></td>
+                        <td className={tableCellClassName}></td>
+                        <td className={`${tableCellClassName} text-right`}></td>
+                        <td className={`${tableCellClassName} text-right font-semibold text-gray-900`}>
+                          {officeSuppliesSubtotal > 0
+                            ? officeSuppliesSubtotal.toLocaleString('en-PH', {
+                                minimumFractionDigits: 2,
+                                maximumFractionDigits: 2,
+                              })
+                            : ''}
+                        </td>
                       </tr>
                     </tbody>
                   </table>
+                </div>
+                <div className="mt-3 flex justify-end gap-2 text-xs">
+                  <button
+                    type="button"
+                    onClick={() => setOfficeSuppliesRowCount((count) => count + 1)}
+                    className="rounded-full border border-yellow-200 px-3 py-1 font-semibold text-yellow-700 transition hover:bg-yellow-50"
+                  >
+                    Add row
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setOfficeSuppliesRowCount((count) => (count > 1 ? count - 1 : 1))}
+                    className="rounded-full border border-yellow-200 px-3 py-1 font-semibold text-yellow-700 transition hover:bg-yellow-50"
+                  >
+                    Delete row
+                  </button>
                 </div>
               </section>
 
@@ -618,22 +799,60 @@ export default function ProjectLeaderProjectsPage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {Array.from({ length: 6 }).map((_, index) => (
+                      {Array.from({ length: otherExpensesRowCount }).map((_, index) => (
                         <tr key={`other-row-${index}`}>
                           <td {...editableCellProps} className={tableCellClassName}></td>
                           <td {...editableCellProps} className={tableCellClassName}></td>
                           <td {...editableCellProps} className={`${tableCellClassName} text-right`}></td>
-                          <td {...editableCellProps} className={`${tableCellClassName} text-right`}></td>
+                          <td className={`${tableCellClassName} text-right`}>
+                            <input
+                              type="number"
+                              min={0}
+                              step="0.01"
+                              className="w-full border-none bg-transparent text-right text-sm text-gray-900 focus:outline-none focus:ring-0"
+                              onChange={(event) => {
+                                const raw = event.target.value.replace(/,/g, '');
+                                const parsed = parseFloat(raw);
+                                setOtherExpensesTotals((prev) => ({
+                                  ...prev,
+                                  [index]: Number.isNaN(parsed) ? 0 : parsed,
+                                }));
+                              }}
+                            />
+                          </td>
                         </tr>
                       ))}
                       <tr>
-                        <td {...editableCellProps} className={`font-semibold text-gray-900 ${tableCellClassName}`}>Sub-total</td>
-                        <td {...editableCellProps} className={tableCellClassName}></td>
-                        <td {...editableCellProps} className={`${tableCellClassName} text-right`}></td>
-                        <td {...editableCellProps} className={`${tableCellClassName} text-right`}></td>
+                        <td className={`font-semibold text-gray-900 ${tableCellClassName}`}>Sub-total</td>
+                        <td className={tableCellClassName}></td>
+                        <td className={`${tableCellClassName} text-right`}></td>
+                        <td className={`${tableCellClassName} text-right font-semibold text-gray-900`}>
+                          {otherExpensesSubtotal > 0
+                            ? otherExpensesSubtotal.toLocaleString('en-PH', {
+                                minimumFractionDigits: 2,
+                                maximumFractionDigits: 2,
+                              })
+                            : ''}
+                        </td>
                       </tr>
                     </tbody>
                   </table>
+                </div>
+                <div className="mt-3 flex justify-end gap-2 text-xs">
+                  <button
+                    type="button"
+                    onClick={() => setOtherExpensesRowCount((count) => count + 1)}
+                    className="rounded-full border border-yellow-200 px-3 py-1 font-semibold text-yellow-700 transition hover:bg-yellow-50"
+                  >
+                    Add row
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setOtherExpensesRowCount((count) => (count > 1 ? count - 1 : 1))}
+                    className="rounded-full border border-yellow-200 px-3 py-1 font-semibold text-yellow-700 transition hover:bg-yellow-50"
+                  >
+                    Delete row
+                  </button>
                 </div>
               </section>
 
@@ -644,15 +863,37 @@ export default function ProjectLeaderProjectsPage() {
                     <tbody>
                       {['A. Training Expenses', 'B. Office Supplies', 'C. Other Expenses'].map((category) => (
                         <tr key={`budget-summary-${category}`}>
-                          <td {...editableCellProps} className={`font-medium text-gray-900 ${tableCellClassName}`}>{category}</td>
-                          <td {...editableCellProps} className={`${tableCellClassName} text-right`}></td>
+                          <td className={`font-medium text-gray-900 ${tableCellClassName}`}>{category}</td>
+                          <td className={`${tableCellClassName} text-right`}>
+                            {category === 'A. Training Expenses'
+                              ? trainingExpensesSubtotal.toLocaleString('en-PH', {
+                                  minimumFractionDigits: 2,
+                                  maximumFractionDigits: 2,
+                                })
+                              : category === 'B. Office Supplies'
+                              ? officeSuppliesSubtotal.toLocaleString('en-PH', {
+                                  minimumFractionDigits: 2,
+                                  maximumFractionDigits: 2,
+                                })
+                              : otherExpensesSubtotal.toLocaleString('en-PH', {
+                                  minimumFractionDigits: 2,
+                                  maximumFractionDigits: 2,
+                                })}
+                          </td>
                         </tr>
                       ))}
                       <tr>
-                        <td {...editableCellProps} className={`font-semibold uppercase text-gray-900 ${tableCellClassName}`}>
+                        <td className={`font-semibold uppercase text-gray-900 ${tableCellClassName}`}>
                           Total
                         </td>
-                        <td {...editableCellProps} className={`${tableCellClassName} text-right font-semibold text-gray-900`}></td>
+                        <td className={`${tableCellClassName} text-right font-semibold text-gray-900`}>
+                          {totalBudgetaryRequirements > 0
+                            ? totalBudgetaryRequirements.toLocaleString('en-PH', {
+                                minimumFractionDigits: 2,
+                                maximumFractionDigits: 2,
+                              })
+                            : ''}
+                        </td>
                       </tr>
                     </tbody>
                   </table>
@@ -808,21 +1049,76 @@ export default function ProjectLeaderProjectsPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {Array.from({ length: 8 }).map((_, index) => (
+                  {Array.from({ length: trainingDesignRowCount }).map((_, index) => (
                     <tr key={`training-row-${index}`}>
                       <td {...editableCellProps} className={tableCellClassName}></td>
-                      <td {...editableCellProps} className={tableCellClassName}></td>
+                      <td className={tableCellClassName}>
+                        <input
+                          type="number"
+                          min={0}
+                          step="0.5"
+                          className="w-full border-none bg-transparent text-sm text-gray-900 focus:outline-none focus:ring-0"
+                          onChange={(event) => {
+                            const raw = event.target.value.replace(/,/g, '');
+                            const parsed = parseFloat(raw);
+                            setTrainingDesignHoursTotals((prev) => ({
+                              ...prev,
+                              [index]: Number.isNaN(parsed) ? 0 : parsed,
+                            }));
+                          }}
+                        />
+                      </td>
                       <td {...editableCellProps} className={tableCellClassName}></td>
                     </tr>
                   ))}
+                  <tr>
+                    <td
+                      className={`font-semibold text-gray-900 ${tableCellClassName}`}
+                    >
+                      Total Hours
+                    </td>
+                    <td className={`${tableCellClassName} font-semibold text-gray-900`}>
+                      {trainingDesignHoursTotal > 0 ? trainingDesignHoursTotal.toString() : ''}
+                    </td>
+                    <td {...editableCellProps} className={tableCellClassName}></td>
+                  </tr>
                 </tbody>
               </table>
+            </div>
+            <div className="mt-3 flex justify-end gap-2 text-xs">
+              <button
+                type="button"
+                onClick={() => setTrainingDesignRowCount((count) => count + 1)}
+                className="rounded-full border border-yellow-200 px-3 py-1 font-semibold text-yellow-700 transition hover:bg-yellow-50"
+              >
+                Add row
+              </button>
+              <button
+                type="button"
+                onClick={() => setTrainingDesignRowCount((count) => (count > 1 ? count - 1 : 1))}
+                className="rounded-full border border-yellow-200 px-3 py-1 font-semibold text-yellow-700 transition hover:bg-yellow-50"
+              >
+                Delete row
+              </button>
             </div>
           </div>
         ),
       },
     ],
-    [],
+    [
+      pathname,
+      fgdRowCount,
+      implementationRowCount,
+      trainingExpensesRowCount,
+      officeSuppliesRowCount,
+      otherExpensesRowCount,
+      trainingDesignRowCount,
+      trainingExpensesSubtotal,
+      officeSuppliesSubtotal,
+      otherExpensesSubtotal,
+      totalBudgetaryRequirements,
+      trainingDesignHoursTotal,
+    ],
   );
 
   const openPanel = () => {
@@ -831,14 +1127,299 @@ export default function ProjectLeaderProjectsPage() {
     setTimeout(() => setPanelVisible(true), 20);
   };
 
+  useEffect(() => {
+    const fetchProjects = async () => {
+      setProjectsLoading(true);
+      setProjectsError(null);
+      try {
+        const stored = window.localStorage.getItem('unihub-auth');
+        if (!stored) {
+          setProjectsLoading(false);
+          return;
+        }
+
+        let projectLeaderId: string | null = null;
+        try {
+          const parsed = JSON.parse(stored) as { id?: string } | null;
+          projectLeaderId = parsed?.id ?? null;
+        } catch {
+          projectLeaderId = null;
+        }
+
+        const url = projectLeaderId
+          ? `http://localhost:5000/api/projects?projectLeaderId=${encodeURIComponent(projectLeaderId)}`
+          : 'http://localhost:5000/api/projects';
+
+        const res = await fetch(url);
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          throw new Error(data.message || 'Failed to load projects');
+        }
+
+        const data = (await res.json()) as Array<{ _id: string; name: string; description: string; status?: string }>;
+        setProjects(data);
+      } catch (error: any) {
+        setProjectsError(error.message || 'Failed to load projects');
+      } finally {
+        setProjectsLoading(false);
+      }
+    };
+
+    fetchProjects();
+  }, []);
+
+  useEffect(() => {
+    if (!viewProjectId || !panelVisible) {
+      return;
+    }
+
+    let cancelled = false;
+
+    const run = async () => {
+      try {
+        const res = await fetch(`http://localhost:5000/api/projects/${viewProjectId}`);
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          throw new Error(data.message || 'Failed to load project');
+        }
+        const data = await res.json();
+        if (!cancelled) {
+          setViewProjectData(data);
+        }
+      } catch (error: any) {
+        console.error('Failed to load project for view', error);
+        if (!cancelled) {
+          setSaveError(error.message || 'Failed to load project for view');
+        }
+      }
+    };
+
+    run();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [viewProjectId, panelVisible]);
+
+  useEffect(() => {
+    if (!panelVisible || !panelRef.current || !viewProjectData) {
+      return;
+    }
+
+    const root = panelRef.current;
+    const proposal = (viewProjectData as any).proposalData as Record<string, any> | undefined;
+    if (!proposal) {
+      return;
+    }
+
+    for (const section of proposalSections) {
+      const snapshot = proposal[section.id];
+      if (!snapshot) continue;
+
+      const sectionElement = root.querySelector<HTMLElement>(`[data-section-id="${section.id}"]`);
+      if (!sectionElement) continue;
+
+      if (Array.isArray(snapshot.inputs)) {
+        const nodes = Array.from(sectionElement.querySelectorAll('input, textarea, select')) as Array<
+          HTMLInputElement & HTMLTextAreaElement & HTMLSelectElement
+        >;
+        snapshot.inputs.forEach((saved: any, index: number) => {
+          const el = nodes[index];
+          if (!el) return;
+          const type = (el as HTMLInputElement).type;
+          const isCheckbox = type === 'checkbox';
+
+          if (isCheckbox) {
+            (el as HTMLInputElement).checked = Boolean(saved.checked);
+          } else if ('value' in el && saved.value != null) {
+            (el as any).value = saved.value;
+          }
+        });
+      }
+
+      if (Array.isArray(snapshot.editableCells)) {
+        const cells = Array.from(
+          sectionElement.querySelectorAll<HTMLElement>('[contenteditable="true"]'),
+        );
+        snapshot.editableCells.forEach((value: string, index: number) => {
+          const cell = cells[index];
+          if (!cell) return;
+          cell.innerText = value ?? '';
+        });
+      }
+    }
+  }, [panelVisible, viewProjectData, proposalSections]);
+
+  const handleSaveProposal = async () => {
+    if (isSaving) return;
+    if (!panelRef.current) return;
+
+    setIsSaving(true);
+    setSaveError(null);
+    setSaveMessage(null);
+
+    try {
+      const root = panelRef.current;
+
+      const sectionsSnapshot: Record<string, any> = {};
+
+      for (const section of proposalSections) {
+        const sectionElement = root.querySelector<HTMLElement>(`[data-section-id="${section.id}"]`);
+        if (!sectionElement) continue;
+
+        const inputs: any[] = [];
+        const cleanupAttributeFns: Array<() => void> = [];
+
+        sectionElement.querySelectorAll('input, textarea, select').forEach((node, index) => {
+          const el = node as HTMLInputElement & HTMLTextAreaElement & HTMLSelectElement;
+          const type = (el as HTMLInputElement).type;
+          const isCheckbox = type === 'checkbox';
+          const currentValue = !isCheckbox ? (el as any).value ?? '' : undefined;
+          const currentChecked = isCheckbox ? (el as any).checked : undefined;
+
+          const prevValueAttr = el.getAttribute('value');
+          const prevCheckedAttr = el.getAttribute('checked');
+
+          if (!isCheckbox) {
+            el.setAttribute('value', currentValue ?? '');
+            cleanupAttributeFns.push(() => {
+              if (prevValueAttr === null) {
+                el.removeAttribute('value');
+              } else {
+                el.setAttribute('value', prevValueAttr);
+              }
+            });
+          } else {
+            if (currentChecked) {
+              el.setAttribute('checked', 'checked');
+            } else {
+              el.removeAttribute('checked');
+            }
+            cleanupAttributeFns.push(() => {
+              if (prevCheckedAttr === null) {
+                el.removeAttribute('checked');
+              } else {
+                el.setAttribute('checked', prevCheckedAttr);
+              }
+            });
+          }
+
+          inputs.push({
+            index,
+            tag: el.tagName,
+            type,
+            name: el.name || undefined,
+            placeholder: 'placeholder' in el ? (el as any).placeholder : undefined,
+            value: currentValue,
+            checked: currentChecked,
+          });
+        });
+
+        const editableCells: string[] = [];
+        sectionElement.querySelectorAll('[contenteditable="true"]').forEach((node) => {
+          const cell = node as HTMLElement;
+          const value = cell.innerText.trim();
+          editableCells.push(value);
+        });
+
+        const textContent = sectionElement.innerText;
+        const htmlContent = sectionElement.innerHTML;
+
+        cleanupAttributeFns.forEach((fn) => fn());
+
+        sectionsSnapshot[section.id] = {
+          textContent,
+          htmlContent,
+          inputs,
+          editableCells,
+        };
+      }
+
+      const stored = window.localStorage.getItem('unihub-auth');
+      if (!stored) {
+        throw new Error('Missing project leader session. Please log in again.');
+      }
+
+      let projectLeaderId: string | null = null;
+      try {
+        const parsed = JSON.parse(stored) as { id?: string } | null;
+        projectLeaderId = parsed?.id ?? null;
+      } catch {
+        projectLeaderId = null;
+      }
+
+      if (!projectLeaderId) {
+        throw new Error('Unable to determine project leader ID from session.');
+      }
+
+      const summarySection = panelRef.current.querySelector<HTMLElement>('[data-section-id="project-summary"]');
+      const titleInput = summarySection?.querySelector<HTMLInputElement>('input[placeholder="Enter project title"]');
+      const name = titleInput?.value ?? 'Untitled Project';
+
+      const response = await fetch('http://localhost:5000/api/projects', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          name,
+          description: 'Extension project proposal',
+          projectLeaderId,
+          sections: sectionsSnapshot,
+          totals: {
+            trainingExpensesSubtotal,
+            officeSuppliesSubtotal,
+            otherExpensesSubtotal,
+            totalBudgetaryRequirements,
+            trainingDesignHoursTotal,
+          },
+        }),
+      });
+
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data.message || 'Failed to save project proposal');
+      }
+
+      setSaveMessage('Project created successfully.');
+      setViewProjectId(null);
+      setViewProjectData(null);
+
+      try {
+        const stored = window.localStorage.getItem('unihub-auth');
+        let projectLeaderId: string | null = null;
+        if (stored) {
+          try {
+            const parsed = JSON.parse(stored) as { id?: string } | null;
+            projectLeaderId = parsed?.id ?? null;
+          } catch {
+            projectLeaderId = null;
+          }
+        }
+
+        const url = projectLeaderId
+          ? `http://localhost:5000/api/projects?projectLeaderId=${encodeURIComponent(projectLeaderId)}`
+          : 'http://localhost:5000/api/projects';
+
+        const res = await fetch(url);
+        if (res.ok) {
+          const data = (await res.json()) as Array<{ _id: string; name: string; description: string; status?: string }>;
+          setProjects(data);
+        }
+      } catch (error) {
+        console.error('Failed to refresh projects after save', error);
+      }
+    } catch (error: any) {
+      setSaveError(error.message || 'Failed to save proposal.');
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
   const closePanel = () => {
     setPanelVisible(false);
     setTimeout(() => setPanelMounted(false), transitionMs);
   };
-
-  const activeSection = useMemo(() => {
-    return proposalSections.find((section) => section.id === activeSectionId) ?? proposalSections[0];
-  }, [proposalSections, activeSectionId]);
 
   useEffect(() => {
     if (!panelMounted) {
@@ -889,24 +1470,72 @@ export default function ProjectLeaderProjectsPage() {
           </div>
         </header>
 
-        <section className="rounded-2xl border border-dashed border-yellow-200 bg-white/80 p-10 text-center">
-          <div className="mx-auto max-w-xl space-y-4">
-            <h2 className="text-xl font-semibold text-gray-900">No projects yet</h2>
-            <p className="text-sm text-gray-600">
-              Create your first extension project to start planning activities, inviting participants, and tracking impact.
-              Once a project is added, it will appear here with quick access to its timeline and beneficiaries.
-            </p>
-            <div className="flex flex-wrap justify-center gap-3">
-              <button onClick={openPanel} className="flex items-center gap-2 rounded-lg bg-yellow-500 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-yellow-600">
-                <PlusCircle className="h-4 w-4" />
-                New Project
-              </button>
-              {/* <button className="flex items-center gap-2 rounded-lg border border-yellow-200 px-4 py-2 text-sm font-semibold text-yellow-600 hover:bg-yellow-50">
-                <Filter className="h-4 w-4" />
-                Import from template
-              </button> */}
+        <section className="rounded-2xl border border-dashed border-yellow-200 bg-white/80 p-10">
+          {projectsLoading ? (
+            <div className="text-center text-sm text-gray-600">Loading projects…</div>
+          ) : projectsError ? (
+            <div className="text-center text-sm text-red-600">{projectsError}</div>
+          ) : projects.length === 0 ? (
+            <div className="mx-auto max-w-xl space-y-4 text-center">
+              <h2 className="text-xl font-semibold text-gray-900">No projects yet</h2>
+              <p className="text-sm text-gray-600">
+                Create your first extension project to start planning activities, inviting participants, and tracking impact.
+                Once a project is added, it will appear here with quick access to its timeline and beneficiaries.
+              </p>
+              <div className="flex flex-wrap justify-center gap-3">
+                <button onClick={openPanel} className="flex items-center gap-2 rounded-lg bg-yellow-500 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-yellow-600">
+                  <PlusCircle className="h-4 w-4" />
+                  New Project
+                </button>
+              </div>
             </div>
-          </div>
+          ) : (
+            <div className="space-y-4">
+              <div className="flex items-center justify-between gap-2">
+                <div>
+                  <h2 className="text-lg font-semibold text-gray-900">Your projects</h2>
+                  <p className="text-xs text-gray-500">Recently saved proposals appear here so you can review or continue editing.</p>
+                </div>
+              </div>
+              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+                {projects.map((project) => {
+                  const status = project.status || 'Pending';
+                  const statusLabel = status === 'Approved' ? 'Approved' : status === 'Rejected' ? 'Rejected' : 'Pending approval';
+                  return (
+                  <div
+                    key={project._id}
+                    className="flex h-full flex-col rounded-xl border border-yellow-100 bg-white/80 p-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md"
+                  >
+                    <div className="flex-1 space-y-1">
+                      <h3 className="text-sm font-semibold text-gray-900 line-clamp-2">{project.name}</h3>
+                      <p className="text-xs text-gray-600 line-clamp-3">{project.description}</p>
+                    </div>
+                    <div className="mt-4 flex items-center justify-between gap-2 text-xs">
+                      <span className="rounded-full bg-yellow-50 px-2 py-1 font-medium text-yellow-700">{statusLabel}</span>
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setViewProjectId(project._id);
+                            openPanel();
+                          }}
+                          className="rounded-full border border-yellow-200 px-3 py-1 font-semibold text-yellow-700 transition hover:bg-yellow-50"
+                        >
+                          View project
+                        </button>
+                        <button
+                          type="button"
+                          className="rounded-full bg-yellow-500 px-3 py-1 font-semibold text-white shadow-sm transition hover:bg-yellow-600"
+                        >
+                          Manage
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                );})}
+              </div>
+            </div>
+          )}
         </section>
 
       </div>
@@ -924,6 +1553,7 @@ export default function ProjectLeaderProjectsPage() {
           }}
         >
           <div
+            ref={panelRef}
             className="relative flex h-full w-full flex-col bg-white shadow-2xl"
             style={{
               transform: panelVisible ? 'translateX(0%)' : 'translateX(100%)',
@@ -936,12 +1566,28 @@ export default function ProjectLeaderProjectsPage() {
                 <p className="text-xs font-semibold uppercase tracking-wide text-yellow-500">Project Leader Workspace</p>
                 <h2 className="text-lg font-semibold text-gray-900">Project Proposal Builder</h2>
               </div>
-              <button
-                onClick={closePanel}
-                className="rounded-full border border-yellow-200 px-3 py-1 text-sm font-semibold text-yellow-600 hover:bg-yellow-50"
-              >
-                Close
-              </button>
+              <div className="flex items-center gap-2">
+                {saveError ? (
+                  <span className="text-xs font-medium text-red-600">{saveError}</span>
+                ) : saveMessage ? (
+                  <span className="text-xs font-medium text-green-600">{saveMessage}</span>
+                ) : null}
+                <button
+                  type="button"
+                  onClick={handleSaveProposal}
+                  disabled={isSaving}
+                  className="rounded-full bg-yellow-500 px-3 py-1 text-sm font-semibold text-white shadow hover:bg-yellow-600 disabled:cursor-not-allowed disabled:opacity-70"
+                >
+                  {isSaving ? 'Creating…' : 'Create project'}
+                </button>
+                <button
+                  type="button"
+                  onClick={closePanel}
+                  className="rounded-full border border-yellow-200 px-3 py-1 text-sm font-semibold text-yellow-600 hover:bg-yellow-50"
+                >
+                  Close
+                </button>
+              </div>
             </div>
             <div className="flex h-full min-h-0 flex-col">
               <div className="border-b border-yellow-100 bg-yellow-50/60">
@@ -973,7 +1619,18 @@ export default function ProjectLeaderProjectsPage() {
                       instructor-approved template.
                     </p>
                   </div>
-                  <div className="space-y-5 text-sm text-gray-700">{activeSection.content}</div>
+                  <div className="space-y-5 text-sm text-gray-700">
+                    {proposalSections.map((section) => (
+                      <div
+                        key={section.id}
+                        data-section-id={section.id}
+                        className={section.id === activeSectionId ? 'space-y-5' : 'hidden'}
+                        aria-hidden={section.id === activeSectionId ? 'false' : 'true'}
+                      >
+                        {section.content}
+                      </div>
+                    ))}
+                  </div>
                 </div>
               </div>
             </div>
