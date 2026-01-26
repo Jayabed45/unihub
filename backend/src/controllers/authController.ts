@@ -57,3 +57,48 @@ export const login = async (req: Request, res: Response) => {
     res.status(500).send('Server error');
   }
 };
+
+export const register = async (req: Request, res: Response) => {
+  const { username, email, password, role } = req.body as {
+    username?: string;
+    email?: string;
+    password?: string;
+    role?: string;
+  };
+
+  try {
+    if (!username || !email || !password || !role) {
+      return res.status(400).json({ message: 'Username, email, password, and role are required' });
+    }
+
+    const existingUser = await User.findOne({ $or: [{ email }, { username }] });
+    if (existingUser) {
+      return res.status(400).json({ message: 'A user with this email or username already exists' });
+    }
+
+    let roleDoc = await Role.findOne({ name: role });
+
+    if (!roleDoc) {
+      // If the role does not exist yet (e.g., Participant), create it on demand
+      roleDoc = new Role({ name: role });
+      await roleDoc.save();
+    }
+
+    const salt = await bcrypt.genSalt(10);
+    const passwordHash = await bcrypt.hash(password, salt);
+
+    const user = new User({
+      username,
+      email,
+      passwordHash,
+      role: roleDoc._id,
+    });
+
+    await user.save();
+
+    return res.status(201).json({ message: 'Registration successful. You can now log in.' });
+  } catch (err: any) {
+    console.error('Error in register controller:', err);
+    return res.status(500).json({ message: 'Server error during registration' });
+  }
+};

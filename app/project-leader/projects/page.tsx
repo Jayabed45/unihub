@@ -1,7 +1,8 @@
 'use client';
 
 import { useMemo, useState, useEffect, useRef, Fragment } from 'react';
-import { usePathname } from 'next/navigation';
+import { usePathname, useSearchParams } from 'next/navigation';
+import { io, type Socket } from 'socket.io-client';
 import { PlusCircle, Filter, CalendarDays } from 'lucide-react';
 
 import { projectLeaderNavigation } from '../navigation';
@@ -40,8 +41,49 @@ const respondentSurveyQuestions = [
   },
 ];
 
+interface LeaderEvaluationCriterion {
+  label: string;
+  rating: number | null;
+  remarks: string;
+}
+
+interface LeaderEvaluation {
+  title?: string;
+  campus?: string;
+  criteria?: LeaderEvaluationCriterion[];
+  totalScore?: number;
+  averageScore?: number;
+  overallComments?: string;
+  extensionRemarks?: string;
+  extensionFlags?: {
+    revised?: boolean;
+    deferred?: boolean;
+  };
+}
+
+interface LeaderProject {
+  _id: string;
+  name: string;
+  description: string;
+  status?: 'Pending' | 'Approved' | 'Rejected' | string;
+  evaluation?: LeaderEvaluation;
+}
+
+interface LeaderJoinRequestRow {
+  id: string;
+  projectId?: string;
+  projectName: string;
+  projectStatus: 'Pending' | 'Approved' | 'Rejected' | string;
+  status: 'Requested' | 'Approved' | 'Rejected' | string;
+  requesterId?: string;
+  requesterName?: string;
+  requesterEmail?: string;
+  createdAt?: string;
+}
+
 export default function ProjectLeaderProjectsPage() {
   const pathname = usePathname();
+  const searchParams = useSearchParams();
   const [panelMounted, setPanelMounted] = useState(false);
   const [panelVisible, setPanelVisible] = useState(false);
   const [activeSectionId, setActiveSectionId] = useState('project-summary');
@@ -59,11 +101,30 @@ export default function ProjectLeaderProjectsPage() {
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
   const panelRef = useRef<HTMLDivElement | null>(null);
-  const [projects, setProjects] = useState<Array<{ _id: string; name: string; description: string; status?: string }>>([]);
+  const listRootRef = useRef<HTMLDivElement | null>(null);
+  const socketRef = useRef<Socket | null>(null);
+  const [projects, setProjects] = useState<LeaderProject[]>([]);
   const [projectsLoading, setProjectsLoading] = useState(false);
   const [projectsError, setProjectsError] = useState<string | null>(null);
   const [viewProjectId, setViewProjectId] = useState<string | null>(null);
   const [viewProjectData, setViewProjectData] = useState<any | null>(null);
+  const [optionsOpenProjectId, setOptionsOpenProjectId] = useState<string | null>(null);
+  const [panelMode, setPanelMode] = useState<'create' | 'review' | 'edit'>('create');
+  const [showEditConfirm, setShowEditConfirm] = useState(false);
+  const [evaluationViewProject, setEvaluationViewProject] = useState<LeaderProject | null>(null);
+  const [participantsViewProject, setParticipantsViewProject] = useState<LeaderProject | null>(null);
+  const [participantsForProject, setParticipantsForProject] = useState<LeaderJoinRequestRow[]>([]);
+  const [participantsLoading, setParticipantsLoading] = useState(false);
+  const [participantsError, setParticipantsError] = useState<string | null>(null);
+  const [participantsPanelVisible, setParticipantsPanelVisible] = useState(false);
+  const [attendanceByParticipant, setAttendanceByParticipant] = useState<Record<string, boolean>>({});
+
+  const parseBudgetNumber = (rawValue: string): number => {
+    const cleaned = rawValue.replace(/[^0-9.,-]/g, '').replace(/,/g, '');
+    if (!cleaned.trim()) return 0;
+    const parsed = parseFloat(cleaned);
+    return Number.isNaN(parsed) ? 0 : parsed;
+  };
 
   const trainingExpensesSubtotal = useMemo(() => {
     let sum = 0;
@@ -110,6 +171,20 @@ export default function ProjectLeaderProjectsPage() {
     return sum;
   }, [trainingDesignRowCount, trainingDesignHoursTotals]);
 
+  const evaluationViewStatus = evaluationViewProject?.status || 'Pending';
+  const evaluationViewStatusLabel =
+    evaluationViewStatus === 'Approved'
+      ? 'Approved'
+      : evaluationViewStatus === 'Rejected'
+      ? 'Rejected'
+      : 'Pending approval';
+  const evaluationViewStatusColor =
+    evaluationViewStatus === 'Approved'
+      ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+      : evaluationViewStatus === 'Rejected'
+      ? 'bg-red-50 text-red-700 border-red-200'
+      : 'bg-yellow-50 text-yellow-700 border-yellow-200';
+
   const activeItem = useMemo(() => {
     return (
       projectLeaderNavigation.find((item) => pathname === item.href || pathname?.startsWith(`${item.href}/`)) ?? 
@@ -119,6 +194,112 @@ export default function ProjectLeaderProjectsPage() {
   }, [pathname]);
 
   const transitionMs = 360;
+
+  const highlightProjectId = searchParams.get('highlight');
+  const viewParticipantsId = searchParams.get('viewParticipants');
+
+  const todayKey = () => new Date().toISOString().slice(0, 10);
+
+  useEffect(() => {
+    if (!highlightProjectId) return;
+    const projectCard = document.getElementById(`project-card-${highlightProjectId}`);
+    if (!projectCard) return;
+    projectCard.scrollIntoView({ behavior: 'smooth' });
+    projectCard.classList.add('highlight');
+    setTimeout(() => projectCard.classList.remove('highlight'), transitionMs);
+  }, [highlightProjectId]);
+
+  const openParticipantsPanel = async (project: LeaderProject) => {
+    setParticipantsViewProject(project);
+    setParticipantsPanelVisible(false);
+    setParticipantsLoading(true);
+    setParticipantsError(null);
+    setParticipantsForProject([]);
+    setAttendanceByParticipant({});
+
+    // kick off slide-in once mounted
+    setTimeout(() => {
+      setParticipantsPanelVisible(true);
+    }, 20);
+
+    const day = todayKey();
+
+    try {
+      let leaderId: string | undefined;
+      const stored = window.localStorage.getItem('unihub-auth');
+      if (stored) {
+        try {
+          const parsed = JSON.parse(stored) as { id?: string; role?: string } | null;
+          if (parsed && parsed.id && parsed.role === 'Project Leader') {
+            leaderId = parsed.id;
+          }
+        } catch {
+          leaderId = undefined;
+        }
+      }
+
+      if (!leaderId) {
+        setParticipantsError('Missing project leader session. Please log in again.');
+        setParticipantsLoading(false);
+        return;
+      }
+
+      const res = await fetch(
+        `http://localhost:5000/api/notifications/join-requests?leaderId=${encodeURIComponent(leaderId)}`,
+      );
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.message || 'Failed to load participants');
+      }
+
+      const data = (await res.json()) as LeaderJoinRequestRow[];
+      const filtered = data.filter((row) => row.projectId === project._id);
+      setParticipantsForProject(filtered);
+
+      // Fetch attendance records for this project for the initial day (today)
+      try {
+        const attendanceRes = await fetch(
+          `http://localhost:5000/api/attendance/project?projectId=${encodeURIComponent(
+            project._id,
+          )}&date=${encodeURIComponent(day)}`,
+        );
+        if (attendanceRes.ok) {
+          const attendanceData = (await attendanceRes.json()) as Array<{
+            participantId: string;
+            status: 'Active';
+          }>;
+
+          const mapped: Record<string, boolean> = {};
+          for (const record of attendanceData) {
+            if (record.participantId) {
+              mapped[record.participantId] = record.status === 'Active';
+            }
+          }
+
+          setAttendanceByParticipant(mapped);
+        } else {
+          setAttendanceByParticipant({});
+        }
+      } catch (attendanceError) {
+        console.error('Failed to load attendance for project', attendanceError);
+        setAttendanceByParticipant({});
+      }
+    } catch (error: any) {
+      setParticipantsError(error.message || 'Failed to load participants');
+    } finally {
+      setParticipantsLoading(false);
+    }
+  };
+
+  const closeParticipantsPanel = () => {
+    setParticipantsPanelVisible(false);
+    setTimeout(() => {
+      setParticipantsViewProject(null);
+      setParticipantsForProject([]);
+      setParticipantsError(null);
+      setAttendanceByParticipant({});
+    }, transitionMs);
+  };
 
   const proposalSections = useMemo(
     () => [
@@ -482,34 +663,32 @@ export default function ProjectLeaderProjectsPage() {
         id: 'organizational-capability',
         label: 'VI. Organizational Capability',
         content: (
-          <div className="space-y-4">
-            {[{
-              label: 'A. Explain why your extension team is the best group to implement this project.',
-              placeholder: 'Describe what makes your team uniquely qualified to lead this initiative.',
-            },
-            {
-              label: 'B. What expertise do you bring to the project?',
-              placeholder: 'List key competencies, certifications, and relevant experience within your team.',
-            },
-            {
-              label:
-                'C. Describe your partner organizations/groups. Explain how you complement each other and why you have selected them as partners.',
-              placeholder: 'Outline partner roles, strengths, and the value each brings to the collaboration.',
-            },
-            {
-              label: 'D. Explain who will do what.',
-              placeholder: 'Map responsibilities across team members and partner organizations.',
-            },
-            ].map((item) => (
-              <label key={item.label} className="block space-y-2 text-sm text-gray-700">
-                <span className="font-medium text-gray-900">{item.label}</span>
+          <div className="space-y-4 text-sm text-gray-700">
+            <div className="space-y-2">
+              <p className="font-medium text-gray-900">
+                A. Explain why your extension team is the best group to implement this project.
+              </p>
+              <p className="font-medium text-gray-900">
+                B. What expertise do you bring to the project?
+              </p>
+              <p className="font-medium text-gray-900">
+                C. Describe your partner organizations/groups. Explain how you complement each other and why you have
+                selected them as partners.
+              </p>
+              <p className="font-medium text-gray-900">D. Explain who will do what.</p>
+            </div>
+            <div>
+              <label className="block space-y-2">
+                <span className="text-xs font-semibold uppercase tracking-wide text-gray-700">
+                  Your response
+                </span>
                 <textarea
                   className={textareaClassName}
-                  rows={5}
-                  placeholder={item.placeholder}
+                  rows={8}
+                  placeholder="Provide a single, integrated answer addressing points A–D above."
                 />
               </label>
-            ))}
+            </div>
           </div>
         ),
       },
@@ -525,46 +704,40 @@ export default function ProjectLeaderProjectsPage() {
               <table className="w-full min-w-[840px] border border-yellow-200 text-sm text-gray-700">
                 <thead>
                   <tr>
-                    <th className={tableHeadCellClassName} rowSpan={2}>
+                    <th className={`${tableHeadCellClassName} min-w-[220px]`}>
                       Name
                     </th>
-                    <th className={`${tableHeadCellClassName} text-center`} colSpan={3}>
+                    <th className={`${tableHeadCellClassName} text-center w-40`}>
                       Gender
                     </th>
-                    <th className={tableHeadCellClassName} rowSpan={2}>
+                    <th className={`${tableHeadCellClassName} w-40`}>
+                      All Gender <span className="block text-[11px] font-normal">(Please specify)</span>
+                    </th>
+                    <th className={tableHeadCellClassName}>
                       Role
                     </th>
-                    <th className={tableHeadCellClassName} rowSpan={2}>
+                    <th className={tableHeadCellClassName}>
                       Responsibility
-                    </th>
-                  </tr>
-                  <tr>
-                    <th className={`${tableHeadCellClassName} text-center`}>Male</th>
-                    <th className={`${tableHeadCellClassName} text-center`}>Female</th>
-                    <th className={`${tableHeadCellClassName} text-center`}>
-                      All Gender <span className="block text-[11px] font-normal">(Please specify)</span>
                     </th>
                   </tr>
                 </thead>
                 <tbody>
                   {Array.from({ length: 10 }).map((_, index) => (
                     <tr key={`team-row-${index}`}>
-                      <td {...editableCellProps} className={tableCellClassName}></td>
-                      <td className={`${tableCellClassName} text-center`}>
-                        <input
-                          type="checkbox"
-                          className="h-4 w-4 rounded border-yellow-300 text-yellow-500 focus:ring-yellow-400"
-                        />
+                      <td {...editableCellProps} className={`${tableCellClassName} min-w-[220px]`}></td>
+                      <td className={`${tableCellClassName} text-center w-40`}>
+                        <select
+                          className={`${inputClassName} h-8 w-full`}
+                          defaultValue=""
+                        >
+                          <option value="">Select</option>
+                          <option value="Male">Male</option>
+                          <option value="Female">Female</option>
+                        </select>
                       </td>
-                      <td className={`${tableCellClassName} text-center`}>
+                      <td className={`${tableCellClassName} w-40`}>
                         <input
-                          type="checkbox"
-                          className="h-4 w-4 rounded border-yellow-300 text-yellow-500 focus:ring-yellow-400"
-                        />
-                      </td>
-                      <td className={tableCellClassName}>
-                        <input
-                          className={`${inputClassName} h-8`}
+                          className={`${inputClassName} h-8 w-full`}
                           placeholder="Specify"
                           type="text"
                         />
@@ -655,16 +828,13 @@ export default function ProjectLeaderProjectsPage() {
                           <td {...editableCellProps} className={`${tableCellClassName} text-right`}></td>
                           <td className={`${tableCellClassName} text-right`}>
                             <input
-                              type="number"
-                              min={0}
-                              step="0.01"
+                              type="text"
                               className="w-full border-none bg-transparent text-right text-sm text-gray-900 focus:outline-none focus:ring-0"
                               onChange={(event) => {
-                                const raw = event.target.value.replace(/,/g, '');
-                                const parsed = parseFloat(raw);
+                                const parsed = parseBudgetNumber(event.target.value);
                                 setTrainingExpensesTotals((prev) => ({
                                   ...prev,
-                                  [index]: Number.isNaN(parsed) ? 0 : parsed,
+                                  [index]: parsed,
                                 }));
                               }}
                             />
@@ -731,16 +901,13 @@ export default function ProjectLeaderProjectsPage() {
                           <td {...editableCellProps} className={`${tableCellClassName} text-right`}></td>
                           <td className={`${tableCellClassName} text-right`}>
                             <input
-                              type="number"
-                              min={0}
-                              step="0.01"
+                              type="text"
                               className="w-full border-none bg-transparent text-right text-sm text-gray-900 focus:outline-none focus:ring-0"
                               onChange={(event) => {
-                                const raw = event.target.value.replace(/,/g, '');
-                                const parsed = parseFloat(raw);
+                                const parsed = parseBudgetNumber(event.target.value);
                                 setOfficeSuppliesTotals((prev) => ({
                                   ...prev,
-                                  [index]: Number.isNaN(parsed) ? 0 : parsed,
+                                  [index]: parsed,
                                 }));
                               }}
                             />
@@ -806,16 +973,13 @@ export default function ProjectLeaderProjectsPage() {
                           <td {...editableCellProps} className={`${tableCellClassName} text-right`}></td>
                           <td className={`${tableCellClassName} text-right`}>
                             <input
-                              type="number"
-                              min={0}
-                              step="0.01"
+                              type="text"
                               className="w-full border-none bg-transparent text-right text-sm text-gray-900 focus:outline-none focus:ring-0"
                               onChange={(event) => {
-                                const raw = event.target.value.replace(/,/g, '');
-                                const parsed = parseFloat(raw);
+                                const parsed = parseBudgetNumber(event.target.value);
                                 setOtherExpensesTotals((prev) => ({
                                   ...prev,
-                                  [index]: Number.isNaN(parsed) ? 0 : parsed,
+                                  [index]: parsed,
                                 }));
                               }}
                             />
@@ -904,133 +1068,8 @@ export default function ProjectLeaderProjectsPage() {
         ),
       },
       {
-        id: 'endorsements',
-        label: 'X. Endorsements & Attachments',
-        content: (
-          <div className="space-y-6 text-sm text-gray-700">
-            <section className="space-y-2">
-              <h4 className="text-base font-semibold text-gray-900">Prepared by</h4>
-              <div className="overflow-x-auto">
-                <table className="w-full min-w-[640px] border border-yellow-200">
-                  <thead>
-                    <tr>
-                      <th className={tableHeadCellClassName}>Name / Position</th>
-                      <th className={`${tableHeadCellClassName} text-center`}>Signature</th>
-                      <th className={`${tableHeadCellClassName} text-center`}>Date</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {Array.from({ length: 8 }).map((_, index) => (
-                      <tr key={`prepared-row-${index}`}>
-                        <td {...editableCellProps} className={tableCellClassName}></td>
-                        <td {...editableCellProps} className={`${tableCellClassName} text-center`}></td>
-                        <td {...editableCellProps} className={`${tableCellClassName} text-center`}></td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </section>
-
-            <section className="space-y-2">
-              <h4 className="text-base font-semibold text-gray-900">Reviewed and Verified By</h4>
-              <div className="overflow-x-auto">
-                <table className="w-full min-w-[640px] border border-yellow-200">
-                  <thead>
-                    <tr>
-                      <th className={tableHeadCellClassName}>Name / Position</th>
-                      <th className={`${tableHeadCellClassName} text-center`}>Signature</th>
-                      <th className={`${tableHeadCellClassName} text-center`}>Date</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {['Extension Chairperson / Director', 'College Dean (for Main Campus only)', 'Campus Director'].map(
-                      (label) => (
-                        <tr key={`reviewed-row-${label}`}>
-                          <td {...editableCellProps} className={tableCellClassName}>{label}</td>
-                          <td {...editableCellProps} className={`${tableCellClassName} text-center`}></td>
-                          <td {...editableCellProps} className={`${tableCellClassName} text-center`}></td>
-                        </tr>
-                      ),
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            </section>
-
-            <section className="space-y-2">
-              <h4 className="text-base font-semibold text-gray-900">Endorsed for BOR Approval</h4>
-              <div className="overflow-x-auto">
-                <table className="w-full min-w-[640px] border border-yellow-200">
-                  <thead>
-                    <tr>
-                      <th className={tableHeadCellClassName}>Name / Position</th>
-                      <th className={`${tableHeadCellClassName} text-center`}>Signature</th>
-                      <th className={`${tableHeadCellClassName} text-center`}>Date</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {Array.from({ length: 3 }).map((_, index) => (
-                      <tr key={`endorse-row-${index}`}>
-                        <td {...editableCellProps} className={tableCellClassName}></td>
-                        <td {...editableCellProps} className={`${tableCellClassName} text-center`}></td>
-                        <td {...editableCellProps} className={`${tableCellClassName} text-center`}></td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </section>
-
-            <section className="space-y-2">
-              <h4 className="text-base font-semibold text-gray-900">Extension Council Remarks</h4>
-              <div className="grid gap-2">
-                {['Deferred', 'For Revision', 'Endorsed for BOR Approval'].map((label) => (
-                  <label key={label} className="flex items-center gap-3 text-sm font-medium text-gray-900">
-                    <input
-                      type="checkbox"
-                      className="h-4 w-4 rounded border-yellow-300 text-yellow-500 focus:ring-yellow-400"
-                    />
-                    <span {...editableCellProps} className="flex-1 rounded border border-yellow-200 px-3 py-1">
-                      {label}
-                    </span>
-                  </label>
-                ))}
-              </div>
-            </section>
-
-            <section className="space-y-2">
-              <h4 className="text-base font-semibold text-gray-900">Attachments</h4>
-              <div className="overflow-x-auto">
-                <table className="w-full min-w-[480px] border border-yellow-200">
-                  <thead>
-                    <tr>
-                      <th className={tableHeadCellClassName}>Document</th>
-                      <th className={`${tableHeadCellClassName} text-center`}>Included</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {Array.from({ length: 5 }).map((_, index) => (
-                      <tr key={`attachment-row-${index}`}>
-                        <td {...editableCellProps} className={tableCellClassName}></td>
-                        <td className={`${tableCellClassName} text-center`}>
-                          <input
-                            type="checkbox"
-                            className="h-4 w-4 rounded border-yellow-300 text-yellow-500 focus:ring-yellow-400"
-                          />
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </section>
-          </div>
-        ),
-      },
-      {
         id: 'training-design',
-        label: 'XI. Training Design',
+        label: 'X. Training Design',
         content: (
           <div className="space-y-4">
             <div className="grid gap-4 md:grid-cols-2">
@@ -1072,9 +1111,7 @@ export default function ProjectLeaderProjectsPage() {
                     </tr>
                   ))}
                   <tr>
-                    <td
-                      className={`font-semibold text-gray-900 ${tableCellClassName}`}
-                    >
+                    <td className={`font-semibold text-gray-900 ${tableCellClassName}`}>
                       Total Hours
                     </td>
                     <td className={`${tableCellClassName} font-semibold text-gray-900`}>
@@ -1127,6 +1164,19 @@ export default function ProjectLeaderProjectsPage() {
     setTimeout(() => setPanelVisible(true), 20);
   };
 
+  const openCreatePanel = () => {
+    setPanelMode('create');
+    setViewProjectId(null);
+    setViewProjectData(null);
+    openPanel();
+  };
+
+  const openReviewPanel = (projectId: string) => {
+    setPanelMode('review');
+    setViewProjectId(projectId);
+    openPanel();
+  };
+
   useEffect(() => {
     const fetchProjects = async () => {
       setProjectsLoading(true);
@@ -1156,7 +1206,7 @@ export default function ProjectLeaderProjectsPage() {
           throw new Error(data.message || 'Failed to load projects');
         }
 
-        const data = (await res.json()) as Array<{ _id: string; name: string; description: string; status?: string }>;
+        const data = (await res.json()) as LeaderProject[];
         setProjects(data);
       } catch (error: any) {
         setProjectsError(error.message || 'Failed to load projects');
@@ -1166,6 +1216,69 @@ export default function ProjectLeaderProjectsPage() {
     };
 
     fetchProjects();
+  }, []);
+
+  useEffect(() => {
+    const stored = window.localStorage.getItem('unihub-auth');
+    if (!stored) {
+      return;
+    }
+
+    let parsed: { id?: string; role?: string } | null = null;
+    try {
+      parsed = JSON.parse(stored) as { id?: string; role?: string } | null;
+    } catch {
+      parsed = null;
+    }
+
+    if (!parsed || !parsed.id) {
+      return;
+    }
+
+    try {
+      const socket = io('http://localhost:5000');
+      socketRef.current = socket;
+
+      socket.emit('notifications:subscribe', {
+        userId: parsed.id,
+        role: parsed.role,
+      });
+
+      const handleRefresh = async () => {
+        setProjectsLoading(true);
+        setProjectsError(null);
+        try {
+          const projectLeaderId = parsed?.id ?? null;
+
+          const url = projectLeaderId
+            ? `http://localhost:5000/api/projects?projectLeaderId=${encodeURIComponent(projectLeaderId)}`
+            : 'http://localhost:5000/api/projects';
+
+          const res = await fetch(url);
+          if (!res.ok) {
+            const data = await res.json().catch(() => ({}));
+            throw new Error(data.message || 'Failed to load projects');
+          }
+
+          const data = (await res.json()) as LeaderProject[];
+          setProjects(data);
+        } catch (error: any) {
+          setProjectsError(error.message || 'Failed to load projects');
+        } finally {
+          setProjectsLoading(false);
+        }
+      };
+
+      socket.on('notifications:refresh', handleRefresh);
+
+      return () => {
+        socket.off('notifications:refresh', handleRefresh);
+        socket.disconnect();
+        socketRef.current = null;
+      };
+    } catch {
+      // ignore client socket errors
+    }
   }, []);
 
   useEffect(() => {
@@ -1249,6 +1362,63 @@ export default function ProjectLeaderProjectsPage() {
       }
     }
   }, [panelVisible, viewProjectData, proposalSections]);
+
+  useEffect(() => {
+    if (!panelRef.current) return;
+
+    const contentRoot = panelRef.current.querySelector<HTMLElement>('[data-panel-content="true"]');
+    if (!contentRoot) return;
+
+    const nodes = Array.from(
+      contentRoot.querySelectorAll<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement | HTMLButtonElement>(
+        'input, textarea, select, button',
+      ),
+    );
+
+    if (panelMode === 'review' && panelVisible) {
+      nodes.forEach((node) => {
+        if (node instanceof HTMLButtonElement) {
+          node.disabled = true;
+        } else if (node instanceof HTMLInputElement) {
+          node.disabled = true;
+        } else if (node instanceof HTMLTextAreaElement) {
+          node.disabled = true;
+        } else if (node instanceof HTMLSelectElement) {
+          node.disabled = true;
+        }
+      });
+    } else {
+      nodes.forEach((node) => {
+        if ('disabled' in node) {
+          (node as any).disabled = false;
+        }
+      });
+    }
+  }, [panelMode, panelVisible, viewProjectData]);
+
+  const handleDeleteProject = async (projectId: string) => {
+    const confirmed = window.confirm('Are you sure you want to delete this project? This action cannot be undone.');
+    if (!confirmed) return;
+
+    try {
+      const res = await fetch(`http://localhost:5000/api/projects/${projectId}`, {
+        method: 'DELETE',
+      });
+
+      if (!res.ok && res.status !== 204) {
+        const data = await res.json().catch(() => ({} as any));
+        throw new Error((data as any).message || 'Failed to delete project');
+      }
+
+      setProjects((prev) => prev.filter((project) => project._id !== projectId));
+      if (viewProjectId === projectId) {
+        setViewProjectId(null);
+      }
+      setOptionsOpenProjectId((current) => (current === projectId ? null : current));
+    } catch (error: any) {
+      setProjectsError(error.message || 'Failed to delete project');
+    }
+  };
 
   const handleSaveProposal = async () => {
     if (isSaving) return;
@@ -1356,34 +1526,79 @@ export default function ProjectLeaderProjectsPage() {
       const titleInput = summarySection?.querySelector<HTMLInputElement>('input[placeholder="Enter project title"]');
       const name = titleInput?.value ?? 'Untitled Project';
 
-      const response = await fetch('http://localhost:5000/api/projects', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          name,
-          description: 'Extension project proposal',
-          projectLeaderId,
-          sections: sectionsSnapshot,
-          totals: {
-            trainingExpensesSubtotal,
-            officeSuppliesSubtotal,
-            otherExpensesSubtotal,
-            totalBudgetaryRequirements,
-            trainingDesignHoursTotal,
+      const totalsPayload = {
+        trainingExpensesSubtotal,
+        officeSuppliesSubtotal,
+        otherExpensesSubtotal,
+        totalBudgetaryRequirements,
+        trainingDesignHoursTotal,
+      };
+
+      let response: Response;
+      if (panelMode === 'create') {
+        // Create a brand new project
+        response = await fetch('http://localhost:5000/api/projects', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
           },
-        }),
-      });
+          body: JSON.stringify({
+            name,
+            description: 'Extension project proposal',
+            projectLeaderId,
+            sections: sectionsSnapshot,
+            totals: totalsPayload,
+          }),
+        });
+      } else {
+        // Update existing project proposal in edit mode
+        if (!viewProjectId) {
+          throw new Error('Missing project ID for editing. Please close and reopen this project.');
+        }
+
+        let leaderId: string | undefined;
+        try {
+          const stored = window.localStorage.getItem('unihub-auth');
+          if (stored) {
+            const parsed = JSON.parse(stored) as { id?: string; role?: string } | null;
+            if (parsed && parsed.id) {
+              leaderId = parsed.id;
+            }
+          }
+        } catch {
+          leaderId = undefined;
+        }
+
+        response = await fetch(
+          `http://localhost:5000/api/projects/${encodeURIComponent(viewProjectId)}/proposal`,
+          {
+            method: 'PATCH',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              proposalData: sectionsSnapshot,
+              name,
+              totals: totalsPayload,
+              updaterId: leaderId,
+              updaterRole: 'Project Leader',
+            }),
+          },
+        );
+      }
 
       if (!response.ok) {
         const data = await response.json().catch(() => ({}));
         throw new Error(data.message || 'Failed to save project proposal');
       }
 
-      setSaveMessage('Project created successfully.');
-      setViewProjectId(null);
-      setViewProjectData(null);
+      if (panelMode === 'create') {
+        setSaveMessage('Project created successfully.');
+        setViewProjectId(null);
+        setViewProjectData(null);
+      } else {
+        setSaveMessage('Project updated successfully.');
+      }
 
       try {
         const stored = window.localStorage.getItem('unihub-auth');
@@ -1403,8 +1618,13 @@ export default function ProjectLeaderProjectsPage() {
 
         const res = await fetch(url);
         if (res.ok) {
-          const data = (await res.json()) as Array<{ _id: string; name: string; description: string; status?: string }>;
+          const data = (await res.json()) as LeaderProject[];
           setProjects(data);
+        }
+
+        // After creating a project, close the panel once the list is refreshed
+        if (panelMode === 'create') {
+          closePanel();
         }
       } catch (error) {
         console.error('Failed to refresh projects after save', error);
@@ -1426,6 +1646,31 @@ export default function ProjectLeaderProjectsPage() {
       setPanelVisible(false);
     }
   }, [panelMounted]);
+
+  useEffect(() => {
+    const highlightId = searchParams.get('highlight');
+    if (!highlightId || !listRootRef.current || projects.length === 0) {
+      return;
+    }
+
+    const card = listRootRef.current.querySelector<HTMLElement>(
+      `[data-leader-project-id="${highlightId}"]`,
+    );
+    if (!card) {
+      return;
+    }
+
+    card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    card.classList.add('ring-4', 'ring-yellow-400', 'ring-offset-2', 'ring-offset-yellow-50');
+
+    const timeoutId = window.setTimeout(() => {
+      card.classList.remove('ring-4', 'ring-yellow-400', 'ring-offset-2', 'ring-offset-yellow-50');
+    }, 1600);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [projects, searchParams, listRootRef]);
 
   useEffect(() => {
     if (!panelMounted) {
@@ -1452,7 +1697,7 @@ export default function ProjectLeaderProjectsPage() {
             </div>
             <div className="flex flex-wrap gap-3">
               <button
-                onClick={openPanel}
+                onClick={openCreatePanel}
                 className="flex items-center gap-2 rounded-lg bg-yellow-500 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-yellow-600"
               >
                 <PlusCircle className="h-4 w-4" />
@@ -1483,7 +1728,7 @@ export default function ProjectLeaderProjectsPage() {
                 Once a project is added, it will appear here with quick access to its timeline and beneficiaries.
               </p>
               <div className="flex flex-wrap justify-center gap-3">
-                <button onClick={openPanel} className="flex items-center gap-2 rounded-lg bg-yellow-500 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-yellow-600">
+                <button onClick={openCreatePanel} className="flex items-center gap-2 rounded-lg bg-yellow-500 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-yellow-600">
                   <PlusCircle className="h-4 w-4" />
                   New Project
                 </button>
@@ -1497,42 +1742,98 @@ export default function ProjectLeaderProjectsPage() {
                   <p className="text-xs text-gray-500">Recently saved proposals appear here so you can review or continue editing.</p>
                 </div>
               </div>
-              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3" ref={listRootRef}>
                 {projects.map((project) => {
                   const status = project.status || 'Pending';
-                  const statusLabel = status === 'Approved' ? 'Approved' : status === 'Rejected' ? 'Rejected' : 'Pending approval';
+                  const statusLabel =
+                    status === 'Approved'
+                      ? 'Approved'
+                      : status === 'Rejected'
+                      ? 'Rejected'
+                      : 'Pending approval';
+                  const hasEvaluation = !!project.evaluation;
+
                   return (
-                  <div
-                    key={project._id}
-                    className="flex h-full flex-col rounded-xl border border-yellow-100 bg-white/80 p-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md"
-                  >
-                    <div className="flex-1 space-y-1">
-                      <h3 className="text-sm font-semibold text-gray-900 line-clamp-2">{project.name}</h3>
-                      <p className="text-xs text-gray-600 line-clamp-3">{project.description}</p>
-                    </div>
-                    <div className="mt-4 flex items-center justify-between gap-2 text-xs">
-                      <span className="rounded-full bg-yellow-50 px-2 py-1 font-medium text-yellow-700">{statusLabel}</span>
-                      <div className="flex gap-2">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setViewProjectId(project._id);
-                            openPanel();
-                          }}
-                          className="rounded-full border border-yellow-200 px-3 py-1 font-semibold text-yellow-700 transition hover:bg-yellow-50"
-                        >
-                          View project
-                        </button>
-                        <button
-                          type="button"
-                          className="rounded-full bg-yellow-500 px-3 py-1 font-semibold text-white shadow-sm transition hover:bg-yellow-600"
-                        >
-                          Manage
-                        </button>
+                    <div
+                      key={project._id}
+                      data-leader-project-id={project._id}
+                      className="flex h-full flex-col rounded-xl border border-yellow-100 bg-white/80 p-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md"
+                    >
+                      <div className="flex-1 space-y-1">
+                        <h3 className="text-sm font-semibold text-gray-900 line-clamp-2">{project.name}</h3>
+                        <p className="text-xs text-gray-600 line-clamp-3">{project.description}</p>
+                      </div>
+                      <div className="mt-4 flex items-center justify-between gap-2 text-xs">
+                        <div className="flex flex-col gap-1">
+                          <span className="inline-flex items-center rounded-full bg-yellow-50 px-2 py-1 font-medium text-yellow-700">
+                            {statusLabel}
+                          </span>
+                          {hasEvaluation && (
+                            <span className="inline-flex items-center rounded-full border border-emerald-100 bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-700">
+                              Evaluated
+                            </span>
+                          )}
+                        </div>
+                        <div className="relative">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setOptionsOpenProjectId((current) =>
+                                current === project._id ? null : project._id,
+                              )
+                            }
+                            className="rounded-full border border-yellow-200 px-3 py-1 font-semibold text-yellow-700 transition hover:bg-yellow-50"
+                          >
+                            Options
+                          </button>
+                          {optionsOpenProjectId === project._id && (
+                            <div className="absolute right-0 z-10 mt-1 w-44 rounded-lg border border-yellow-100 bg-white py-1 text-left text-[11px] shadow-lg">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  openReviewPanel(project._id);
+                                  setOptionsOpenProjectId(null);
+                                }}
+                                className="block w-full px-3 py-1.5 text-left text-gray-700 hover:bg-yellow-50"
+                              >
+                                Review project
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  void openParticipantsPanel(project);
+                                  setOptionsOpenProjectId(null);
+                                }}
+                                className="block w-full px-3 py-1.5 text-left text-sky-700 hover:bg-sky-50"
+                              >
+                                View participants
+                              </button>
+                              {hasEvaluation && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setEvaluationViewProject(project);
+                                    setOptionsOpenProjectId(null);
+                                  }}
+                                  className="block w-full px-3 py-1.5 text-left text-emerald-700 hover:bg-emerald-50"
+                                >
+                                  View evaluation
+                                </button>
+                              )}
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteProject(project._id)}
+                                className="block w-full px-3 py-1.5 text-left text-red-600 hover:bg-red-50"
+                              >
+                                Delete
+                              </button>
+                            </div>
+                          )}
+                        </div>
                       </div>
                     </div>
-                  </div>
-                );})}
+                  );
+                })}
               </div>
             </div>
           )}
@@ -1557,7 +1858,7 @@ export default function ProjectLeaderProjectsPage() {
             className="relative flex h-full w-full flex-col bg-white shadow-2xl"
             style={{
               transform: panelVisible ? 'translateX(0%)' : 'translateX(100%)',
-              transition: `transform ${transitionMs}ms cubic-bezier(0.22, 0.61, 0.36, 1)`,
+              transition: `transform ${transitionMs}ms cubic-bezier(0.22, 0.61, 0.36, 1)` ,
               willChange: 'transform',
             }}
           >
@@ -1572,14 +1873,31 @@ export default function ProjectLeaderProjectsPage() {
                 ) : saveMessage ? (
                   <span className="text-xs font-medium text-green-600">{saveMessage}</span>
                 ) : null}
-                <button
-                  type="button"
-                  onClick={handleSaveProposal}
-                  disabled={isSaving}
-                  className="rounded-full bg-yellow-500 px-3 py-1 text-sm font-semibold text-white shadow hover:bg-yellow-600 disabled:cursor-not-allowed disabled:opacity-70"
-                >
-                  {isSaving ? 'Creating…' : 'Create project'}
-                </button>
+                {panelMode === 'create' || panelMode === 'edit' ? (
+                  <button
+                    type="button"
+                    onClick={handleSaveProposal}
+                    disabled={isSaving}
+                    className="rounded-full bg-yellow-500 px-3 py-1 text-sm font-semibold text-white shadow hover:bg-yellow-600 disabled:cursor-not-allowed disabled:opacity-70"
+                  >
+                    {isSaving
+                      ? panelMode === 'create'
+                        ? 'Creating…'
+                        : 'Saving…'
+                      : panelMode === 'create'
+                      ? 'Create project'
+                      : 'Save project'}
+                  </button>
+                ) : null}
+                {panelMode === 'review' && (
+                  <button
+                    type="button"
+                    onClick={() => setShowEditConfirm(true)}
+                    className="rounded-full border border-yellow-300 px-3 py-1 text-sm font-semibold text-yellow-700 hover:bg-yellow-50"
+                  >
+                    Edit project
+                  </button>
+                )}
                 <button
                   type="button"
                   onClick={closePanel}
@@ -1589,28 +1907,30 @@ export default function ProjectLeaderProjectsPage() {
                 </button>
               </div>
             </div>
-            <div className="flex h-full min-h-0 flex-col">
-              <div className="border-b border-yellow-100 bg-yellow-50/60">
-                <div className="flex gap-2 overflow-x-auto px-4 py-3 text-sm">
+            <div className="flex h-full min-h-0">
+              <aside className="hidden w-64 border-r border-yellow-100 bg-yellow-50/60 p-4 text-sm text-gray-800 sm:flex sm:flex-col">
+                <p className="mb-3 text-xs font-semibold uppercase tracking-wide text-yellow-700">Sections</p>
+                <nav className="flex-1 space-y-1 overflow-y-auto pr-1">
                   {proposalSections.map((section) => {
                     const isActive = section.id === activeSectionId;
                     return (
                       <button
                         key={section.id}
+                        type="button"
                         onClick={() => setActiveSectionId(section.id)}
-                        className={`whitespace-nowrap rounded-full px-4 py-2 font-medium transition ${
+                        className={`block w-full rounded-lg px-3 py-2 text-left text-xs font-medium transition ${
                           isActive
                             ? 'bg-yellow-500 text-white shadow'
-                            : 'bg-white text-yellow-700 hover:bg-yellow-100'
+                            : 'bg-white text-yellow-800 hover:bg-yellow-100'
                         }`}
                       >
                         {section.label}
                       </button>
                     );
                   })}
-                </div>
-              </div>
-              <div className="flex-1 overflow-y-auto px-6 py-6 sm:px-8">
+                </nav>
+              </aside>
+              <div className="flex-1 overflow-y-auto px-4 py-6 sm:px-8" data-panel-content="true">
                 <div className="mx-auto w-full max-w-6xl space-y-6">
                   <div className="rounded-xl border border-yellow-100 bg-yellow-50/60 p-4 text-xs text-yellow-800">
                     <p className="font-semibold uppercase tracking-wide">Reminder</p>
@@ -1619,7 +1939,9 @@ export default function ProjectLeaderProjectsPage() {
                       instructor-approved template.
                     </p>
                   </div>
-                  <div className="space-y-5 text-sm text-gray-700">
+                  <div
+                    className={`space-y-5 text-sm text-gray-700 ${panelMode === 'review' ? 'pointer-events-none opacity-75' : ''}`}
+                  >
                     {proposalSections.map((section) => (
                       <div
                         key={section.id}
@@ -1632,6 +1954,347 @@ export default function ProjectLeaderProjectsPage() {
                     ))}
                   </div>
                 </div>
+              </div>
+            </div>
+            {showEditConfirm && (
+              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+                <div className="w-full max-w-sm rounded-xl bg-white p-5 shadow-xl">
+                  <h3 className="text-sm font-semibold text-gray-900">Edit this project?</h3>
+                  <p className="mt-2 text-xs text-gray-600">
+                    You are currently reviewing a submitted proposal. Editing will allow you to change the original
+                    fields. Continue to edit this project?
+                  </p>
+                  <div className="mt-4 flex justify-end gap-2 text-xs">
+                    <button
+                      type="button"
+                      onClick={() => setShowEditConfirm(false)}
+                      className="rounded-full border border-gray-200 px-3 py-1 font-semibold text-gray-700 hover:bg-gray-50"
+                    >
+                      No, keep reviewing
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowEditConfirm(false);
+                        setPanelMode('edit');
+                        setSaveError(null);
+                        setSaveMessage(null);
+                      }}
+                      className="rounded-full bg-yellow-500 px-3 py-1 font-semibold text-white shadow hover:bg-yellow-600"
+                    >
+                      Yes, edit project
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {participantsViewProject && (
+        <div
+          className="fixed inset-0 z-30 flex bg-black/40 backdrop-blur-sm"
+          role="dialog"
+          aria-modal="true"
+        >
+          <div
+            className="ml-auto flex h-full w-full max-w-3xl flex-col bg-white shadow-2xl rounded-l-2xl"
+            style={{
+              transform: participantsPanelVisible ? 'translateX(0%)' : 'translateX(100%)',
+              transition: `transform ${transitionMs}ms cubic-bezier(0.22, 0.61, 0.36, 1)`,
+            }}
+          >
+            <div className="flex items-center justify-between border-b border-gray-100 px-5 py-4">
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">Project participants</p>
+                <h2 className="text-base font-semibold text-gray-900 line-clamp-1">
+                  {participantsViewProject.name}
+                </h2>
+                <p className="text-[11px] text-gray-500 line-clamp-1">
+                  Participants, join requests, and attendance for this project.
+                </p>
+              </div>
+              <div className="flex items-center gap-3">
+                <div className="flex items-center gap-2 text-[11px] text-gray-700">
+                  <span className="font-semibold">Date</span>
+                  <input
+                    type="date"
+                    defaultValue={todayKey()}
+                    onChange={async (event) => {
+                      const value = event.target.value || todayKey();
+                      if (!participantsViewProject) return;
+                      try {
+                        const attendanceRes = await fetch(
+                          `http://localhost:5000/api/attendance/project?projectId=${encodeURIComponent(
+                            participantsViewProject._id,
+                          )}&date=${encodeURIComponent(value)}`,
+                        );
+                        if (attendanceRes.ok) {
+                          const attendanceData = (await attendanceRes.json()) as Array<{
+                            participantId: string;
+                            status: 'Active';
+                          }>;
+
+                          const mapped: Record<string, boolean> = {};
+                          for (const record of attendanceData) {
+                            if (record.participantId) {
+                              mapped[record.participantId] = record.status === 'Active';
+                            }
+                          }
+
+                          setAttendanceByParticipant(mapped);
+                        } else {
+                          setAttendanceByParticipant({});
+                        }
+                      } catch (attendanceError) {
+                        console.error('Failed to load attendance for selected date', attendanceError);
+                        setAttendanceByParticipant({});
+                      }
+                    }}
+                    className="rounded border border-gray-200 px-2 py-1 text-[11px] text-gray-800 focus:border-yellow-400 focus:outline-none focus:ring-1 focus:ring-yellow-300"
+                  />
+                </div>
+                <button
+                  type="button"
+                  onClick={closeParticipantsPanel}
+                  className="rounded-full border border-gray-200 px-3 py-1 text-[11px] font-semibold text-gray-700 hover:bg-gray-50"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+            <div className="flex-1 overflow-y-auto px-5 py-5 sm:px-6 text-sm text-gray-800">
+              {participantsLoading ? (
+                <div className="py-10 text-center text-xs text-gray-500">Loading participants…</div>
+              ) : participantsError ? (
+                <div className="py-10 text-center text-xs text-red-600">{participantsError}</div>
+              ) : participantsForProject.length === 0 ? (
+                <div className="py-10 text-center text-xs text-gray-500">
+                  No participants have requested to join this project yet.
+                </div>
+              ) : (
+                <div className="overflow-hidden rounded-xl border border-gray-100">
+                  <div className="overflow-x-auto">
+                    <table className="min-w-full border-collapse text-sm">
+                      <thead>
+                        <tr className="bg-gray-50/80">
+                          <th className="sticky left-0 z-10 border-b border-gray-200 bg-gray-50/90 px-4 py-2 text-left text-[11px] font-semibold uppercase tracking-wide text-gray-500">
+                            Name
+                          </th>
+                          <th className="border-b border-gray-200 px-4 py-2 text-left text-[11px] font-semibold uppercase tracking-wide text-gray-500">
+                            Email
+                          </th>
+                          <th className="border-b border-gray-200 px-4 py-2 text-left text-[11px] font-semibold uppercase tracking-wide text-gray-500">
+                            Attendance
+                          </th>
+                          <th className="border-b border-gray-200 px-4 py-2 text-right text-[11px] font-semibold uppercase tracking-wide text-gray-500">
+                            Requested at
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {participantsForProject.map((row) => {
+                        const requestedAtLabel = row.createdAt
+                          ? new Date(row.createdAt).toLocaleString('en-PH', {
+                              dateStyle: 'medium',
+                              timeStyle: 'short',
+                            })
+                          : '';
+
+                        const isActive = !!(row.requesterId && attendanceByParticipant[row.requesterId]);
+                        const attendanceLabel = isActive ? 'Active' : 'Inactive';
+                        const attendanceClass = isActive
+                          ? 'inline-flex items-center rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold text-emerald-700 border border-emerald-200'
+                          : 'inline-flex items-center rounded-full bg-gray-50 px-2 py-0.5 text-[11px] font-semibold text-gray-700 border border-gray-200';
+
+                        return (
+                          <tr key={row.id} className="transition-colors hover:bg-gray-50">
+                            <td className="sticky left-0 z-0 whitespace-nowrap border-b border-gray-100 bg-white px-4 py-2 text-sm font-medium text-gray-900">
+                              {row.requesterName || 'Unknown participant'}
+                            </td>
+                            <td className="border-b border-gray-100 px-4 py-2 align-middle text-sm text-gray-800">
+                              {row.requesterEmail || '—'}
+                            </td>
+                            <td className="border-b border-gray-100 px-4 py-2 align-middle text-sm">
+                              <span className={attendanceClass}>{attendanceLabel}</span>
+                            </td>
+                            <td className="border-b border-gray-100 px-4 py-2 text-right align-middle text-xs text-gray-500">
+                              {requestedAtLabel}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {evaluationViewProject && (
+        <div
+          className="fixed inset-0 z-30 flex bg-black/40 backdrop-blur-sm"
+          role="dialog"
+          aria-modal="true"
+        >
+          <div
+            className="flex h-full w-full flex-col bg-white shadow-2xl"
+            style={{
+              transform: 'translateX(0%)',
+            }}
+          >
+            <div className="flex items-center justify-between border-b border-yellow-100 px-6 py-4">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wide text-yellow-500">Project Evaluation</p>
+                <h2 className="text-lg font-semibold text-gray-900">Admin evaluation result</h2>
+                <p className="text-xs text-gray-600 line-clamp-1">{evaluationViewProject.name}</p>
+              </div>
+              <div className="flex items-center gap-2">
+                <span
+                  className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide ${evaluationViewStatusColor}`}
+                >
+                  {evaluationViewStatusLabel}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setEvaluationViewProject(null)}
+                  className="rounded-full border border-yellow-200 px-3 py-1 text-xs font-semibold text-yellow-700 hover:bg-yellow-50"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+            <div className="flex-1 overflow-y-auto px-6 py-6 sm:px-8">
+              <div className="mx-auto w-full max-w-5xl space-y-6 text-sm text-gray-800">
+                {!evaluationViewProject.evaluation ? (
+                  <div className="text-center text-xs text-gray-500">
+                    This project does not have an evaluation yet.
+                  </div>
+                ) : (
+                  <>
+                    <section className="space-y-3 rounded-xl border border-yellow-100 bg-yellow-50/60 p-4">
+                      <h3 className="text-sm font-semibold text-gray-900">Proposal information</h3>
+                      <div className="grid gap-3 md:grid-cols-[220px_1fr] md:items-center">
+                        <span className="text-xs font-semibold uppercase tracking-wide text-gray-700">
+                          Title of the Proposal
+                        </span>
+                        <p className="rounded-lg border border-yellow-100 bg-white px-3 py-2 text-sm text-gray-900">
+                          {evaluationViewProject.evaluation?.title || evaluationViewProject.name}
+                        </p>
+                        <span className="text-xs font-semibold uppercase tracking-wide text-gray-700">Campus</span>
+                        <p className="rounded-lg border border-yellow-100 bg-white px-3 py-2 text-sm text-gray-900">
+                          {evaluationViewProject.evaluation?.campus || '—'}
+                        </p>
+                      </div>
+                    </section>
+
+                    <section className="space-y-3">
+                      <div className="flex flex-col gap-1 sm:flex-row sm:items-baseline sm:justify-between">
+                        <h3 className="text-sm font-semibold text-gray-900">
+                          Criteria for Evaluation (Phase 2 and Above / Continuing)
+                        </h3>
+                        <p className="text-xs text-gray-500">
+                          Ratings and remarks entered by the admin evaluator.
+                        </p>
+                      </div>
+                      <div className="overflow-x-auto">
+                        <table className="w-full min-w-[720px] border border-yellow-100 text-xs sm:text-sm text-gray-800">
+                          <thead>
+                            <tr>
+                              <th className="border border-yellow-100 bg-yellow-50 px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-wide text-gray-700">
+                                Criteria for Evaluation
+                              </th>
+                              <th className="w-32 border border-yellow-100 bg-yellow-50 px-3 py-2 text-center text-[11px] font-semibold uppercase tracking-wide text-gray-700">
+                                Rating
+                              </th>
+                              <th className="border border-yellow-100 bg-yellow-50 px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-wide text-gray-700">
+                                Remarks / Comments
+                              </th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {(evaluationViewProject.evaluation?.criteria || []).map((row, index) => (
+                              <tr key={`${row.label}-${index}`} className="align-top">
+                                <td className="border border-yellow-100 px-3 py-2 text-xs sm:text-sm">
+                                  {row.label}
+                                </td>
+                                <td className="border border-yellow-100 px-3 py-2 text-center align-middle text-xs sm:text-sm">
+                                  {typeof row.rating === 'number' && Number.isFinite(row.rating)
+                                    ? row.rating.toFixed(2)
+                                    : '—'}
+                                </td>
+                                <td className="border border-yellow-100 px-3 py-2 text-xs sm:text-sm">
+                                  {row.remarks || '—'}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                          <tfoot>
+                            <tr className="bg-yellow-50/70">
+                              <td className="border border-yellow-100 px-3 py-2 text-right text-xs font-semibold text-gray-900">
+                                TOTAL SCORE
+                              </td>
+                              <td className="border border-yellow-100 px-3 py-2 text-center text-xs font-semibold text-gray-900">
+                                {typeof evaluationViewProject.evaluation?.totalScore === 'number'
+                                  ? evaluationViewProject.evaluation.totalScore.toFixed(2)
+                                  : '—'}
+                              </td>
+                              <td className="border border-yellow-100 px-3 py-2" />
+                            </tr>
+                            <tr className="bg-yellow-50/70">
+                              <td className="border border-yellow-100 px-3 py-2 text-right text-xs font-semibold text-gray-900">
+                                TOTAL AVERAGE POINTS
+                              </td>
+                              <td className="border border-yellow-100 px-3 py-2 text-center text-xs font-semibold text-gray-900">
+                                {typeof evaluationViewProject.evaluation?.averageScore === 'number'
+                                  ? evaluationViewProject.evaluation.averageScore.toFixed(2)
+                                  : '—'}
+                              </td>
+                              <td className="border border-yellow-100 px-3 py-2" />
+                            </tr>
+                          </tfoot>
+                        </table>
+                      </div>
+                    </section>
+
+                    <section className="space-y-3 rounded-xl border border-yellow-100 bg-white p-4">
+                      <h3 className="text-sm font-semibold text-gray-900">Overall comments / recommendations</h3>
+                      <p className="whitespace-pre-wrap rounded-lg border border-yellow-100 bg-yellow-50/50 px-3 py-2 text-sm text-gray-900">
+                        {evaluationViewProject.evaluation?.overallComments || '—'}
+                      </p>
+                    </section>
+
+                    <section className="space-y-3 rounded-xl border border-yellow-100 bg-white p-4">
+                      <h3 className="text-sm font-semibold text-gray-900">Extension Proposal Remarks</h3>
+                      <div className="flex flex-wrap gap-4 text-xs text-gray-800">
+                        <div className="inline-flex items-center gap-2">
+                          <span className="inline-flex h-4 w-4 items-center justify-center rounded border border-yellow-300 bg-white text-[10px] font-bold text-yellow-600">
+                            {evaluationViewProject.evaluation?.extensionFlags?.revised ? '✓' : ''}
+                          </span>
+                          <span>Revised</span>
+                        </div>
+                        <div className="inline-flex items-center gap-2">
+                          <span className="inline-flex h-4 w-4 items-center justify-center rounded border border-yellow-300 bg-white text-[10px] font-bold text-yellow-600">
+                            {evaluationViewProject.evaluation?.extensionFlags?.deferred ? '✓' : ''}
+                          </span>
+                          <span>Deferred</span>
+                        </div>
+                      </div>
+                      <div>
+                        <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-gray-700">
+                          Additional remarks
+                        </span>
+                        <p className="whitespace-pre-wrap rounded-lg border border-yellow-100 bg-yellow-50/50 px-3 py-2 text-sm text-gray-900">
+                          {evaluationViewProject.evaluation?.extensionRemarks || '—'}
+                        </p>
+                      </div>
+                    </section>
+                  </>
+                )}
               </div>
             </div>
           </div>

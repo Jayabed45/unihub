@@ -1,11 +1,13 @@
 'use client';
 
-import { ReactNode, useCallback, useEffect, useState } from 'react';
+import { ReactNode, useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { io, type Socket } from 'socket.io-client';
 
 import Sidebar from './components/Sidebar';
 import HeaderBar from './components/HeaderBar';
 import { projectLeaderNavigation } from './navigation';
+import NotificationsPanel, { type NotificationItem } from '../admin/components/NotificationsPanel';
 
 const STORAGE_KEY = 'unihub-auth';
 
@@ -20,6 +22,20 @@ export default function ProjectLeaderLayout({ children }: { children: ReactNode 
   const [isAuthorized, setIsAuthorized] = useState(false);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
   const [logoutProgress, setLogoutProgress] = useState(0);
+  const [user, setUser] = useState<StoredUser | null>(null);
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [notifications, setNotifications] = useState<NotificationItem[]>([]);
+  const socketRef = useRef<Socket | null>(null);
+
+  const markNotificationRead = useCallback(async (id: string) => {
+    try {
+      await fetch(`http://localhost:5000/api/notifications/${encodeURIComponent(id)}/read`, {
+        method: 'PATCH',
+      });
+    } catch (error) {
+      console.error('Failed to mark project leader notification as read', error);
+    }
+  }, []);
 
   const handleLogout = useCallback(() => {
     if (isLoggingOut) return;
@@ -55,12 +71,82 @@ export default function ProjectLeaderLayout({ children }: { children: ReactNode 
       }
 
       setIsAuthorized(true);
+      setUser(parsed);
     } catch (error) {
       console.error('Failed to verify project leader access', error);
       window.localStorage.removeItem(STORAGE_KEY);
       router.replace('/');
     }
   }, [router]);
+
+  useEffect(() => {
+    if (!user) {
+      return;
+    }
+
+    const fetchNotifications = async () => {
+      try {
+        const res = await fetch(
+          `http://localhost:5000/api/notifications?recipient=${encodeURIComponent(user.id)}`,
+        );
+        if (!res.ok) {
+          return;
+        }
+        const data = (await res.json()) as Array<{
+          _id: string;
+          title: string;
+          message: string;
+          project?: string;
+          read?: boolean;
+          createdAt?: string;
+        }>;
+
+        const mapped: NotificationItem[] = data.map((item) => ({
+          id: item._id,
+          title: item.title,
+          message: item.message,
+          timestamp: item.createdAt
+            ? new Date(item.createdAt).toLocaleString('en-PH', {
+                dateStyle: 'medium',
+                timeStyle: 'short',
+              })
+            : '',
+          read: item.read,
+          projectId: (item as any).project ? String((item as any).project) : undefined,
+        }));
+
+        setNotifications(mapped);
+      } catch (error) {
+        console.error('Failed to load project leader notifications', error);
+      }
+    };
+
+    fetchNotifications();
+
+    try {
+      const socket = io('http://localhost:5000');
+      socketRef.current = socket;
+
+      socket.emit('notifications:subscribe', {
+        userId: user.id,
+        role: user.role,
+      });
+
+      const handleRefresh = () => {
+        void fetchNotifications();
+      };
+
+      socket.on('notifications:refresh', handleRefresh);
+
+      return () => {
+        socket.off('notifications:refresh', handleRefresh);
+        socket.disconnect();
+        socketRef.current = null;
+      };
+    } catch {
+      // ignore socket setup errors on client
+    }
+  }, [user]);
 
   useEffect(() => {
     if (!isLoggingOut) {
@@ -101,11 +187,44 @@ export default function ProjectLeaderLayout({ children }: { children: ReactNode 
       <Sidebar items={projectLeaderNavigation} onLogout={handleLogout} logoutDisabled={isLoggingOut} />
 
       <main className="flex-1">
-        <HeaderBar />
+        <HeaderBar
+          onToggleNotifications={() => setNotificationsOpen((prev) => !prev)}
+          notificationsOpen={notificationsOpen}
+          notificationsCount={notifications.filter((item) => !item.read).length}
+        />
         <div className="mx-auto max-w-6xl px-6 py-10">
           {children}
         </div>
       </main>
+
+      <NotificationsPanel
+        isOpen={notificationsOpen}
+        onClose={() => setNotificationsOpen(false)}
+        notifications={notifications}
+        onNotificationClick={(item) => {
+          setNotifications((prev) =>
+            prev.map((n) => (n.id === item.id ? { ...n, read: true } : n)),
+          );
+
+          markNotificationRead(item.id);
+
+          if (item.title === 'Join request received') {
+            router.push('/project-leader/participants');
+          } else if (item.title === 'Attendance' && item.projectId) {
+            router.push(
+              `/project-leader/projects?highlight=${encodeURIComponent(
+                item.projectId,
+              )}&viewParticipants=${encodeURIComponent(item.projectId)}`,
+            );
+          } else if (item.projectId) {
+            router.push(
+              `/project-leader/projects?highlight=${encodeURIComponent(item.projectId)}`,
+            );
+          }
+
+          setNotificationsOpen(false);
+        }}
+      />
     </div>
   );
 }

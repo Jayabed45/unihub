@@ -4,10 +4,10 @@ import { ReactNode, useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { io, type Socket } from 'socket.io-client';
 
-import Sidebar from './components/Sidebar';
-import HeaderBar from './components/HeaderBar';
-import NotificationsPanel, { type NotificationItem } from './components/NotificationsPanel';
-import { adminNavigation } from './navigation';
+import ParticipantSidebar from './components/Sidebar';
+import ParticipantHeaderBar from './components/HeaderBar';
+import { participantNavigation } from './navigation';
+import NotificationsPanel, { type NotificationItem } from '../admin/components/NotificationsPanel';
 
 const STORAGE_KEY = 'unihub-auth';
 
@@ -17,7 +17,7 @@ interface StoredUser {
   token: string;
 }
 
-export default function AdminLayout({ children }: { children: ReactNode }) {
+export default function ParticipantLayout({ children }: { children: ReactNode }) {
   const router = useRouter();
   const [isAuthorized, setIsAuthorized] = useState(false);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
@@ -32,7 +32,7 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
         method: 'PATCH',
       });
     } catch (error) {
-      console.error('Failed to mark admin notification as read', error);
+      console.error('Failed to mark participant notification as read', error);
     }
   }, []);
 
@@ -63,7 +63,7 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
       }
 
       const parsed = JSON.parse(stored) as StoredUser | null;
-      if (!parsed || parsed.role !== 'Administrator') {
+      if (!parsed || parsed.role !== 'Participant') {
         window.localStorage.removeItem(STORAGE_KEY);
         router.replace('/');
         return;
@@ -71,76 +71,30 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
 
       setIsAuthorized(true);
     } catch (error) {
-      console.error('Failed to verify administrator access', error);
+      console.error('Failed to verify participant access', error);
       window.localStorage.removeItem(STORAGE_KEY);
       router.replace('/');
     }
   }, [router]);
 
   useEffect(() => {
-    const fetchNotifications = async () => {
+    const run = async () => {
       try {
-        const res = await fetch('http://localhost:5000/api/notifications');
-        if (!res.ok) {
+        const stored = window.localStorage.getItem(STORAGE_KEY);
+        if (!stored) {
           return;
         }
 
-        const data = (await res.json()) as Array<{
-          _id: string;
-          title: string;
-          message: string;
-          project?: string;
-          read?: boolean;
-          createdAt?: string;
-        }>;
+        const parsed = JSON.parse(stored) as StoredUser | null;
+        if (!parsed || !parsed.id) {
+          return;
+        }
 
-        const mapped: NotificationItem[] = data.map((item) => ({
-          id: item._id,
-          title: item.title,
-          message: item.message,
-          timestamp: item.createdAt
-            ? new Date(item.createdAt).toLocaleString('en-PH', {
-                dateStyle: 'medium',
-                timeStyle: 'short',
-              })
-            : '',
-          read: item.read,
-          projectId: (item as any).project ? String((item as any).project) : undefined,
-        }));
-
-        setNotifications(mapped);
-      } catch (error) {
-        console.error('Failed to load admin notifications', error);
-      }
-    };
-
-    fetchNotifications();
-  }, []);
-
-  useEffect(() => {
-    try {
-      const stored = window.localStorage.getItem(STORAGE_KEY);
-      if (!stored) {
-        return;
-      }
-
-      const parsed = JSON.parse(stored) as StoredUser | null;
-      if (!parsed || !parsed.id) {
-        return;
-      }
-
-      const socket = io('http://localhost:5000');
-      socketRef.current = socket;
-
-      socket.emit('notifications:subscribe', {
-        userId: parsed.id,
-        role: parsed.role,
-      });
-
-      const handleRefresh = () => {
-        const run = async () => {
+        const fetchNotifications = async () => {
           try {
-            const res = await fetch('http://localhost:5000/api/notifications');
+            const res = await fetch(
+              `http://localhost:5000/api/notifications?recipient=${encodeURIComponent(parsed.id)}`,
+            );
             if (!res.ok) {
               return;
             }
@@ -170,23 +124,41 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
 
             setNotifications(mapped);
           } catch (error) {
-            console.error('Failed to load admin notifications', error);
+            console.error('Failed to load participant notifications', error);
           }
         };
 
-        void run();
-      };
+        await fetchNotifications();
 
-      socket.on('notifications:refresh', handleRefresh);
+        try {
+          const socket = io('http://localhost:5000');
+          socketRef.current = socket;
 
-      return () => {
-        socket.off('notifications:refresh', handleRefresh);
-        socket.disconnect();
-        socketRef.current = null;
-      };
-    } catch {
-      // ignore socket setup errors on client
-    }
+          socket.emit('notifications:subscribe', {
+            userId: parsed.id,
+            role: parsed.role,
+          });
+
+          const handleRefresh = () => {
+            void fetchNotifications();
+          };
+
+          socket.on('notifications:refresh', handleRefresh);
+
+          return () => {
+            socket.off('notifications:refresh', handleRefresh);
+            socket.disconnect();
+            socketRef.current = null;
+          };
+        } catch {
+          // ignore socket setup errors on client
+        }
+      } catch (error) {
+        console.error('Failed to load participant notifications', error);
+      }
+    };
+
+    run();
   }, []);
 
   useEffect(() => {
@@ -225,17 +197,16 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
           />
         </div>
       )}
-      <Sidebar items={adminNavigation} onLogout={handleLogout} logoutDisabled={isLoggingOut} />
+
+      <ParticipantSidebar items={participantNavigation} onLogout={handleLogout} logoutDisabled={isLoggingOut} />
 
       <main className="flex-1">
-        <HeaderBar
+        <ParticipantHeaderBar
           onToggleNotifications={() => setNotificationsOpen((prev) => !prev)}
           notificationsOpen={notificationsOpen}
           notificationsCount={notifications.filter((item) => !item.read).length}
         />
-        <div className="mx-auto max-w-6xl px-6 py-10">
-          {children}
-        </div>
+        <div className="mx-auto max-w-6xl px-6 py-10">{children}</div>
       </main>
 
       <NotificationsPanel
@@ -249,13 +220,12 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
 
           markNotificationRead(item.id);
 
-          if (item.projectId) {
-            router.push(`/admin/projects?highlight=${encodeURIComponent(item.projectId)}`);
-          }
-
           setNotificationsOpen(false);
+
+          if (item.projectId) {
+            router.push(`/participant/Feeds?projectId=${encodeURIComponent(item.projectId)}`);
+          }
         }}
-        onClear={() => setNotifications([])}
       />
     </div>
   );

@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
+import { io, type Socket } from "socket.io-client";
 
 interface AdminProject {
   _id: string;
@@ -10,6 +12,7 @@ interface AdminProject {
 }
 
 export default function AdminProjectsPage() {
+  const searchParams = useSearchParams();
   const [projects, setProjects] = useState<AdminProject[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -35,6 +38,8 @@ export default function AdminProjectsPage() {
   const [evaluationError, setEvaluationError] = useState<string | null>(null);
 
   const viewerRootRef = useRef<HTMLDivElement | null>(null);
+  const listRootRef = useRef<HTMLDivElement | null>(null);
+  const socketRef = useRef<Socket | null>(null);
 
   const viewerSections: Array<{ id: string; label: string }> = [
     { id: 'project-summary', label: 'I. Project Summary' },
@@ -46,8 +51,7 @@ export default function AdminProjectsPage() {
     { id: 'community-extension-team', label: 'VII. Community Extension Team' },
     { id: 'sustainability-plan', label: 'VIII. Sustainability Plan' },
     { id: 'budgetary-requirement', label: 'IX. Budgetary Requirement' },
-    { id: 'endorsements', label: 'X. Endorsements & Attachments' },
-    { id: 'training-design', label: 'XI. Training Design' },
+    { id: 'training-design', label: 'X. Training Design' },
   ];
 
   const evaluationCriteria: Array<{ label: string }> = [
@@ -85,6 +89,45 @@ export default function AdminProjectsPage() {
     };
 
     run();
+  }, []);
+
+  useEffect(() => {
+    try {
+      const socket = io("http://localhost:5000");
+      socketRef.current = socket;
+
+      socket.emit("notifications:subscribe", {
+        role: "Administrator",
+      });
+
+      const handleRefresh = async () => {
+        setLoading(true);
+        setError(null);
+        try {
+          const res = await fetch("http://localhost:5000/api/projects");
+          if (!res.ok) {
+            const data = await res.json().catch(() => ({}));
+            throw new Error(data.message || "Failed to load projects");
+          }
+          const data = (await res.json()) as AdminProject[];
+          setProjects(data);
+        } catch (err: any) {
+          setError(err.message || "Failed to load projects");
+        } finally {
+          setLoading(false);
+        }
+      };
+
+      socket.on("notifications:refresh", handleRefresh);
+
+      return () => {
+        socket.off("notifications:refresh", handleRefresh);
+        socket.disconnect();
+        socketRef.current = null;
+      };
+    } catch {
+      // ignore client socket errors
+    }
   }, []);
 
   useEffect(() => {
@@ -262,6 +305,31 @@ export default function AdminProjectsPage() {
     }
   };
 
+  useEffect(() => {
+    const highlightId = searchParams.get('highlight');
+    if (!highlightId || !listRootRef.current || projects.length === 0) {
+      return;
+    }
+
+    const card = listRootRef.current.querySelector<HTMLElement>(
+      `[data-admin-project-id="${highlightId}"]`,
+    );
+    if (!card) {
+      return;
+    }
+
+    card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    card.classList.add('ring-4', 'ring-amber-400', 'ring-offset-2', 'ring-offset-amber-50');
+
+    const timeoutId = window.setTimeout(() => {
+      card.classList.remove('ring-4', 'ring-amber-400', 'ring-offset-2', 'ring-offset-amber-50');
+    }, 1600);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [projects, searchParams, listRootRef]);
+
   return (
     <div className="space-y-6">
       <header className="flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
@@ -290,7 +358,7 @@ export default function AdminProjectsPage() {
                 Each card represents a proposal from a project leader. Use the status pill and View button to review.
               </p>
             </div>
-            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3" ref={listRootRef}>
               {projects.map((project) => {
                 const status = project.status || "Pending";
                 const statusLabel =
@@ -305,6 +373,7 @@ export default function AdminProjectsPage() {
                 return (
                   <div
                     key={project._id}
+                    data-admin-project-id={project._id}
                     className="flex h-full flex-col rounded-xl border border-amber-100 bg-white/80 p-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md"
                   >
                     <div className="flex-1 space-y-1">
@@ -394,9 +463,10 @@ export default function AdminProjectsPage() {
                 </button>
               </div>
             </div>
-            <div className="flex h-full min-h-0 flex-col" ref={viewerRootRef}>
-              <div className="border-b border-amber-100 bg-amber-50/60">
-                <div className="flex gap-2 overflow-x-auto px-4 py-3 text-xs sm:text-sm">
+            <div className="flex h-full min-h-0" ref={viewerRootRef}>
+              <aside className="hidden w-64 border-r border-amber-100 bg-amber-50/60 p-4 text-xs text-gray-800 sm:flex sm:flex-col">
+                <p className="mb-3 font-semibold uppercase tracking-wide text-amber-700">Sections</p>
+                <nav className="flex-1 space-y-1 overflow-y-auto pr-1">
                   {viewerSections.map((section) => {
                     const isActive = section.id === activeSectionId;
                     return (
@@ -404,19 +474,19 @@ export default function AdminProjectsPage() {
                         key={section.id}
                         type="button"
                         onClick={() => setActiveSectionId(section.id)}
-                        className={`whitespace-nowrap rounded-full px-4 py-2 font-medium transition ${
+                        className={`block w-full rounded-lg px-3 py-2 text-left text-[11px] font-medium transition ${
                           isActive
                             ? 'bg-amber-500 text-white shadow'
-                            : 'bg-white text-amber-700 hover:bg-amber-100'
+                            : 'bg-white text-amber-800 hover:bg-amber-100'
                         }`}
                       >
                         {section.label}
                       </button>
                     );
                   })}
-                </div>
-              </div>
-              <div className="flex-1 overflow-y-auto px-6 py-6 sm:px-8">
+                </nav>
+              </aside>
+              <div className="flex-1 overflow-y-auto px-4 py-6 sm:px-8">
                 <div className="mx-auto w-full max-w-6xl space-y-4 text-sm text-gray-700">
                   {viewerLoading ? (
                     <div className="text-center text-xs text-gray-600">Loading proposal…</div>

@@ -8,7 +8,7 @@ const STORAGE_KEY = 'unihub-auth';
 const ROLE_ROUTES: Record<string, string> = {
   Administrator: '/admin/dashboard',
   'Project Leader': '/project-leader/dashboard',
-  Participant: '/participant/dashboard',
+  Participant: '/participant/Feeds',
 };
 
 interface User {
@@ -29,6 +29,7 @@ export default function HomePage() {
   const [isRestoring, setIsRestoring] = useState(true);
 
   const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
   const [loading, setLoading] = useState(false);
   const [progress, setProgress] = useState(0);
   const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
@@ -107,8 +108,8 @@ export default function HomePage() {
     if (loading || isRedirecting) {
       return;
     }
-
     setError('');
+    setNotice('');
     setProgress(0);
     setAuthMode(isLoginMode ? 'register' : 'login');
   };
@@ -117,6 +118,7 @@ export default function HomePage() {
     e.preventDefault();
     setLoading(true);
     setError('');
+    setNotice('');
     setProgress(10);
 
     try {
@@ -152,6 +154,12 @@ export default function HomePage() {
   const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
+    setNotice('');
+
+    if (!registerName || !registerEmail || !registerPassword) {
+      setError('Please fill in all required fields.');
+      return;
+    }
 
     if (registerPassword !== registerConfirmPassword) {
       setError('Passwords do not match.');
@@ -162,7 +170,24 @@ export default function HomePage() {
     setProgress(10);
 
     try {
-      await new Promise((resolve) => window.setTimeout(resolve, 900));
+      const res = await fetch('http://localhost:5000/api/auth/register', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          username: registerName,
+          email: registerEmail,
+          password: registerPassword,
+          role: registerRole,
+        }),
+      });
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.message || 'Registration failed. Please try again.');
+      }
+
       setProgress(100);
       setRegisterName('');
       setRegisterEmail('');
@@ -170,9 +195,10 @@ export default function HomePage() {
       setRegisterConfirmPassword('');
       setRegisterRole('Participant');
       setAuthMode('login');
-    } catch (err) {
-      console.error('Registration simulation failed', err);
-      setError('Registration failed. Please try again.');
+      setNotice('Registration successful. Please log in.');
+    } catch (err: any) {
+      console.error('Registration failed', err);
+      setError(err.message || 'Registration failed. Please try again.');
     } finally {
       window.setTimeout(() => {
         setLoading(false);
@@ -298,7 +324,12 @@ export default function HomePage() {
                   {isLoginMode && error && (
                     <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-600">{error}</p>
                   )}
-                  {isRedirecting && !error && (
+                  {isLoginMode && !error && notice && (
+                    <p className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-700">
+                      {notice}
+                    </p>
+                  )}
+                  {isRedirecting && !error && !notice && (
                     <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-medium text-amber-700">
                       Redirecting to your dashboard…
                     </p>
