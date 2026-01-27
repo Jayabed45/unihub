@@ -2,7 +2,6 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { io, type Socket } from "socket.io-client";
 
 interface AdminProject {
   _id: string;
@@ -12,7 +11,6 @@ interface AdminProject {
 }
 
 export default function AdminProjectsPage() {
-  const searchParams = useSearchParams();
   const [projects, setProjects] = useState<AdminProject[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -38,8 +36,9 @@ export default function AdminProjectsPage() {
   const [evaluationError, setEvaluationError] = useState<string | null>(null);
 
   const viewerRootRef = useRef<HTMLDivElement | null>(null);
-  const listRootRef = useRef<HTMLDivElement | null>(null);
-  const socketRef = useRef<Socket | null>(null);
+
+  const searchParams = useSearchParams();
+  const highlightProjectId = searchParams.get('highlightProjectId');
 
   const viewerSections: Array<{ id: string; label: string }> = [
     { id: 'project-summary', label: 'I. Project Summary' },
@@ -89,45 +88,6 @@ export default function AdminProjectsPage() {
     };
 
     run();
-  }, []);
-
-  useEffect(() => {
-    try {
-      const socket = io("http://localhost:5000");
-      socketRef.current = socket;
-
-      socket.emit("notifications:subscribe", {
-        role: "Administrator",
-      });
-
-      const handleRefresh = async () => {
-        setLoading(true);
-        setError(null);
-        try {
-          const res = await fetch("http://localhost:5000/api/projects");
-          if (!res.ok) {
-            const data = await res.json().catch(() => ({}));
-            throw new Error(data.message || "Failed to load projects");
-          }
-          const data = (await res.json()) as AdminProject[];
-          setProjects(data);
-        } catch (err: any) {
-          setError(err.message || "Failed to load projects");
-        } finally {
-          setLoading(false);
-        }
-      };
-
-      socket.on("notifications:refresh", handleRefresh);
-
-      return () => {
-        socket.off("notifications:refresh", handleRefresh);
-        socket.disconnect();
-        socketRef.current = null;
-      };
-    } catch {
-      // ignore client socket errors
-    }
   }, []);
 
   useEffect(() => {
@@ -305,31 +265,6 @@ export default function AdminProjectsPage() {
     }
   };
 
-  useEffect(() => {
-    const highlightId = searchParams.get('highlight');
-    if (!highlightId || !listRootRef.current || projects.length === 0) {
-      return;
-    }
-
-    const card = listRootRef.current.querySelector<HTMLElement>(
-      `[data-admin-project-id="${highlightId}"]`,
-    );
-    if (!card) {
-      return;
-    }
-
-    card.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    card.classList.add('ring-4', 'ring-amber-400', 'ring-offset-2', 'ring-offset-amber-50');
-
-    const timeoutId = window.setTimeout(() => {
-      card.classList.remove('ring-4', 'ring-amber-400', 'ring-offset-2', 'ring-offset-amber-50');
-    }, 1600);
-
-    return () => {
-      window.clearTimeout(timeoutId);
-    };
-  }, [projects, searchParams, listRootRef]);
-
   return (
     <div className="space-y-6">
       <header className="flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
@@ -358,7 +293,7 @@ export default function AdminProjectsPage() {
                 Each card represents a proposal from a project leader. Use the status pill and View button to review.
               </p>
             </div>
-            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3" ref={listRootRef}>
+            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
               {projects.map((project) => {
                 const status = project.status || "Pending";
                 const statusLabel =
@@ -370,11 +305,16 @@ export default function AdminProjectsPage() {
                     ? "bg-red-50 text-red-700 border-red-200"
                     : "bg-amber-50 text-amber-700 border-amber-200";
 
+                const isHighlighted = project._id === highlightProjectId;
+
                 return (
                   <div
                     key={project._id}
-                    data-admin-project-id={project._id}
-                    className="flex h-full flex-col rounded-xl border border-amber-100 bg-white/80 p-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md"
+                    className={`flex h-full flex-col rounded-xl border bg-white/80 p-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md ${
+                      isHighlighted
+                        ? 'border-amber-400 shadow-amber-300 ring-2 ring-amber-300 animate-pulse'
+                        : 'border-amber-100'
+                    }`}
                   >
                     <div className="flex-1 space-y-1">
                       <h2 className="text-sm font-semibold text-gray-900 line-clamp-2">{project.name}</h2>

@@ -2,8 +2,7 @@
 
 import { useMemo, useState, useEffect, useRef, Fragment } from 'react';
 import { usePathname, useSearchParams } from 'next/navigation';
-import { io, type Socket } from 'socket.io-client';
-import { PlusCircle, Filter, CalendarDays } from 'lucide-react';
+import { PlusCircle, Filter, CalendarDays, CheckCircle2 } from 'lucide-react';
 
 import { projectLeaderNavigation } from '../navigation';
 
@@ -69,21 +68,14 @@ interface LeaderProject {
   evaluation?: LeaderEvaluation;
 }
 
-interface LeaderJoinRequestRow {
-  id: string;
-  projectId?: string;
-  projectName: string;
-  projectStatus: 'Pending' | 'Approved' | 'Rejected' | string;
-  status: 'Requested' | 'Approved' | 'Rejected' | string;
-  requesterId?: string;
-  requesterName?: string;
-  requesterEmail?: string;
-  createdAt?: string;
+interface ProjectActivity {
+  title: string;
+  hours?: string;
+  resourcePerson?: string;
 }
 
 export default function ProjectLeaderProjectsPage() {
   const pathname = usePathname();
-  const searchParams = useSearchParams();
   const [panelMounted, setPanelMounted] = useState(false);
   const [panelVisible, setPanelVisible] = useState(false);
   const [activeSectionId, setActiveSectionId] = useState('project-summary');
@@ -101,8 +93,6 @@ export default function ProjectLeaderProjectsPage() {
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
   const panelRef = useRef<HTMLDivElement | null>(null);
-  const listRootRef = useRef<HTMLDivElement | null>(null);
-  const socketRef = useRef<Socket | null>(null);
   const [projects, setProjects] = useState<LeaderProject[]>([]);
   const [projectsLoading, setProjectsLoading] = useState(false);
   const [projectsError, setProjectsError] = useState<string | null>(null);
@@ -112,12 +102,15 @@ export default function ProjectLeaderProjectsPage() {
   const [panelMode, setPanelMode] = useState<'create' | 'review' | 'edit'>('create');
   const [showEditConfirm, setShowEditConfirm] = useState(false);
   const [evaluationViewProject, setEvaluationViewProject] = useState<LeaderProject | null>(null);
-  const [participantsViewProject, setParticipantsViewProject] = useState<LeaderProject | null>(null);
-  const [participantsForProject, setParticipantsForProject] = useState<LeaderJoinRequestRow[]>([]);
-  const [participantsLoading, setParticipantsLoading] = useState(false);
-  const [participantsError, setParticipantsError] = useState<string | null>(null);
-  const [participantsPanelVisible, setParticipantsPanelVisible] = useState(false);
-  const [attendanceByParticipant, setAttendanceByParticipant] = useState<Record<string, boolean>>({});
+  const [showSubmitSuccess, setShowSubmitSuccess] = useState(false);
+  const searchParams = useSearchParams();
+  const highlightProjectId = searchParams.get('highlightProjectId');
+  const [currentPanelProjectStatus, setCurrentPanelProjectStatus] = useState<string | null>(null);
+  const [activitiesModalOpen, setActivitiesModalOpen] = useState(false);
+  const [activitiesModalProject, setActivitiesModalProject] = useState<LeaderProject | null>(null);
+  const [activitiesForModal, setActivitiesForModal] = useState<ProjectActivity[]>([]);
+  const [attendanceViewOpen, setAttendanceViewOpen] = useState(false);
+  const [attendanceActivity, setAttendanceActivity] = useState<ProjectActivity | null>(null);
 
   const parseBudgetNumber = (rawValue: string): number => {
     const cleaned = rawValue.replace(/[^0-9.,-]/g, '').replace(/,/g, '');
@@ -194,112 +187,6 @@ export default function ProjectLeaderProjectsPage() {
   }, [pathname]);
 
   const transitionMs = 360;
-
-  const highlightProjectId = searchParams.get('highlight');
-  const viewParticipantsId = searchParams.get('viewParticipants');
-
-  const todayKey = () => new Date().toISOString().slice(0, 10);
-
-  useEffect(() => {
-    if (!highlightProjectId) return;
-    const projectCard = document.getElementById(`project-card-${highlightProjectId}`);
-    if (!projectCard) return;
-    projectCard.scrollIntoView({ behavior: 'smooth' });
-    projectCard.classList.add('highlight');
-    setTimeout(() => projectCard.classList.remove('highlight'), transitionMs);
-  }, [highlightProjectId]);
-
-  const openParticipantsPanel = async (project: LeaderProject) => {
-    setParticipantsViewProject(project);
-    setParticipantsPanelVisible(false);
-    setParticipantsLoading(true);
-    setParticipantsError(null);
-    setParticipantsForProject([]);
-    setAttendanceByParticipant({});
-
-    // kick off slide-in once mounted
-    setTimeout(() => {
-      setParticipantsPanelVisible(true);
-    }, 20);
-
-    const day = todayKey();
-
-    try {
-      let leaderId: string | undefined;
-      const stored = window.localStorage.getItem('unihub-auth');
-      if (stored) {
-        try {
-          const parsed = JSON.parse(stored) as { id?: string; role?: string } | null;
-          if (parsed && parsed.id && parsed.role === 'Project Leader') {
-            leaderId = parsed.id;
-          }
-        } catch {
-          leaderId = undefined;
-        }
-      }
-
-      if (!leaderId) {
-        setParticipantsError('Missing project leader session. Please log in again.');
-        setParticipantsLoading(false);
-        return;
-      }
-
-      const res = await fetch(
-        `http://localhost:5000/api/notifications/join-requests?leaderId=${encodeURIComponent(leaderId)}`,
-      );
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data.message || 'Failed to load participants');
-      }
-
-      const data = (await res.json()) as LeaderJoinRequestRow[];
-      const filtered = data.filter((row) => row.projectId === project._id);
-      setParticipantsForProject(filtered);
-
-      // Fetch attendance records for this project for the initial day (today)
-      try {
-        const attendanceRes = await fetch(
-          `http://localhost:5000/api/attendance/project?projectId=${encodeURIComponent(
-            project._id,
-          )}&date=${encodeURIComponent(day)}`,
-        );
-        if (attendanceRes.ok) {
-          const attendanceData = (await attendanceRes.json()) as Array<{
-            participantId: string;
-            status: 'Active';
-          }>;
-
-          const mapped: Record<string, boolean> = {};
-          for (const record of attendanceData) {
-            if (record.participantId) {
-              mapped[record.participantId] = record.status === 'Active';
-            }
-          }
-
-          setAttendanceByParticipant(mapped);
-        } else {
-          setAttendanceByParticipant({});
-        }
-      } catch (attendanceError) {
-        console.error('Failed to load attendance for project', attendanceError);
-        setAttendanceByParticipant({});
-      }
-    } catch (error: any) {
-      setParticipantsError(error.message || 'Failed to load participants');
-    } finally {
-      setParticipantsLoading(false);
-    }
-  };
-
-  const closeParticipantsPanel = () => {
-    setParticipantsPanelVisible(false);
-    setTimeout(() => {
-      setParticipantsViewProject(null);
-      setParticipantsForProject([]);
-      setParticipantsError(null);
-      setAttendanceByParticipant({});
-    }, transitionMs);
-  };
 
   const proposalSections = useMemo(
     () => [
@@ -1168,13 +1055,54 @@ export default function ProjectLeaderProjectsPage() {
     setPanelMode('create');
     setViewProjectId(null);
     setViewProjectData(null);
+     setCurrentPanelProjectStatus(null);
     openPanel();
   };
 
   const openReviewPanel = (projectId: string) => {
+    const project = projects.find((item) => item._id === projectId);
+    setCurrentPanelProjectStatus((project?.status as string) || 'Pending');
     setPanelMode('review');
     setViewProjectId(projectId);
     openPanel();
+  };
+
+  const openActivitiesModal = (project: LeaderProject) => {
+    const fullProject = project as any;
+    const trainingSnapshot =
+      fullProject && fullProject.proposalData && fullProject.proposalData['training-design'];
+
+    let parsed: ProjectActivity[] = [];
+
+    if (trainingSnapshot && Array.isArray(trainingSnapshot.editableCells)) {
+      const cells: string[] = trainingSnapshot.editableCells;
+
+      // For training design, editableCells are stored as pairs per row:
+      // [topicRow0, resourceRow0, topicRow1, resourceRow1, ... , footerResourceCell]
+      for (let i = 0; i + 1 < cells.length; i += 2) {
+        const title = (cells[i] || '').trim();
+        const resourcePerson = (cells[i + 1] || '').trim();
+
+        // Skip rows without a topic (also skips the final 'Total Hours' resource-only cell)
+        if (!title) {
+          continue;
+        }
+
+        parsed.push({
+          title,
+          resourcePerson: resourcePerson || undefined,
+        });
+      }
+    }
+
+    setActivitiesForModal(parsed);
+    setActivitiesModalProject(project);
+    setActivitiesModalOpen(true);
+  };
+
+  const openAttendanceView = (activity: ProjectActivity) => {
+    setAttendanceActivity(activity);
+    setAttendanceViewOpen(true);
   };
 
   useEffect(() => {
@@ -1216,69 +1144,6 @@ export default function ProjectLeaderProjectsPage() {
     };
 
     fetchProjects();
-  }, []);
-
-  useEffect(() => {
-    const stored = window.localStorage.getItem('unihub-auth');
-    if (!stored) {
-      return;
-    }
-
-    let parsed: { id?: string; role?: string } | null = null;
-    try {
-      parsed = JSON.parse(stored) as { id?: string; role?: string } | null;
-    } catch {
-      parsed = null;
-    }
-
-    if (!parsed || !parsed.id) {
-      return;
-    }
-
-    try {
-      const socket = io('http://localhost:5000');
-      socketRef.current = socket;
-
-      socket.emit('notifications:subscribe', {
-        userId: parsed.id,
-        role: parsed.role,
-      });
-
-      const handleRefresh = async () => {
-        setProjectsLoading(true);
-        setProjectsError(null);
-        try {
-          const projectLeaderId = parsed?.id ?? null;
-
-          const url = projectLeaderId
-            ? `http://localhost:5000/api/projects?projectLeaderId=${encodeURIComponent(projectLeaderId)}`
-            : 'http://localhost:5000/api/projects';
-
-          const res = await fetch(url);
-          if (!res.ok) {
-            const data = await res.json().catch(() => ({}));
-            throw new Error(data.message || 'Failed to load projects');
-          }
-
-          const data = (await res.json()) as LeaderProject[];
-          setProjects(data);
-        } catch (error: any) {
-          setProjectsError(error.message || 'Failed to load projects');
-        } finally {
-          setProjectsLoading(false);
-        }
-      };
-
-      socket.on('notifications:refresh', handleRefresh);
-
-      return () => {
-        socket.off('notifications:refresh', handleRefresh);
-        socket.disconnect();
-        socketRef.current = null;
-      };
-    } catch {
-      // ignore client socket errors
-    }
   }, []);
 
   useEffect(() => {
@@ -1362,6 +1227,32 @@ export default function ProjectLeaderProjectsPage() {
       }
     }
   }, [panelVisible, viewProjectData, proposalSections]);
+
+  useEffect(() => {
+    if (!panelRef.current || !panelVisible) return;
+
+    const root = panelRef.current;
+
+    const summaryTitleInput = root.querySelector<HTMLInputElement>(
+      '[data-section-id="project-summary"] input[placeholder="Enter project title"]',
+    );
+    const trainingTitleInput = root.querySelector<HTMLInputElement>(
+      '[data-section-id="training-design"] input[placeholder="Enter project title"]',
+    );
+
+    if (!summaryTitleInput || !trainingTitleInput) return;
+
+    const syncTitle = () => {
+      trainingTitleInput.value = summaryTitleInput.value;
+    };
+
+    syncTitle();
+    summaryTitleInput.addEventListener('input', syncTitle);
+
+    return () => {
+      summaryTitleInput.removeEventListener('input', syncTitle);
+    };
+  }, [panelVisible]);
 
   useEffect(() => {
     if (!panelRef.current) return;
@@ -1526,79 +1417,41 @@ export default function ProjectLeaderProjectsPage() {
       const titleInput = summarySection?.querySelector<HTMLInputElement>('input[placeholder="Enter project title"]');
       const name = titleInput?.value ?? 'Untitled Project';
 
-      const totalsPayload = {
-        trainingExpensesSubtotal,
-        officeSuppliesSubtotal,
-        otherExpensesSubtotal,
-        totalBudgetaryRequirements,
-        trainingDesignHoursTotal,
-      };
-
-      let response: Response;
-      if (panelMode === 'create') {
-        // Create a brand new project
-        response = await fetch('http://localhost:5000/api/projects', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
+      const response = await fetch('http://localhost:5000/api/projects', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          name,
+          description: 'Extension project proposal',
+          projectLeaderId,
+          sections: sectionsSnapshot,
+          totals: {
+            trainingExpensesSubtotal,
+            officeSuppliesSubtotal,
+            otherExpensesSubtotal,
+            totalBudgetaryRequirements,
+            trainingDesignHoursTotal,
           },
-          body: JSON.stringify({
-            name,
-            description: 'Extension project proposal',
-            projectLeaderId,
-            sections: sectionsSnapshot,
-            totals: totalsPayload,
-          }),
-        });
-      } else {
-        // Update existing project proposal in edit mode
-        if (!viewProjectId) {
-          throw new Error('Missing project ID for editing. Please close and reopen this project.');
-        }
-
-        let leaderId: string | undefined;
-        try {
-          const stored = window.localStorage.getItem('unihub-auth');
-          if (stored) {
-            const parsed = JSON.parse(stored) as { id?: string; role?: string } | null;
-            if (parsed && parsed.id) {
-              leaderId = parsed.id;
-            }
-          }
-        } catch {
-          leaderId = undefined;
-        }
-
-        response = await fetch(
-          `http://localhost:5000/api/projects/${encodeURIComponent(viewProjectId)}/proposal`,
-          {
-            method: 'PATCH',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-              proposalData: sectionsSnapshot,
-              name,
-              totals: totalsPayload,
-              updaterId: leaderId,
-              updaterRole: 'Project Leader',
-            }),
-          },
-        );
-      }
+        }),
+      });
 
       if (!response.ok) {
         const data = await response.json().catch(() => ({}));
         throw new Error(data.message || 'Failed to save project proposal');
       }
 
-      if (panelMode === 'create') {
-        setSaveMessage('Project created successfully.');
-        setViewProjectId(null);
-        setViewProjectData(null);
-      } else {
-        setSaveMessage('Project updated successfully.');
-      }
+      setSaveMessage('Project created successfully.');
+      setViewProjectId(null);
+      setViewProjectData(null);
+
+      // Close the builder panel after a successful submit
+      setPanelVisible(false);
+      setTimeout(() => setPanelMounted(false), transitionMs);
+
+      // Show a success confirmation modal so the leader knows what happens next
+      setShowSubmitSuccess(true);
 
       try {
         const stored = window.localStorage.getItem('unihub-auth');
@@ -1621,11 +1474,6 @@ export default function ProjectLeaderProjectsPage() {
           const data = (await res.json()) as LeaderProject[];
           setProjects(data);
         }
-
-        // After creating a project, close the panel once the list is refreshed
-        if (panelMode === 'create') {
-          closePanel();
-        }
       } catch (error) {
         console.error('Failed to refresh projects after save', error);
       }
@@ -1646,31 +1494,6 @@ export default function ProjectLeaderProjectsPage() {
       setPanelVisible(false);
     }
   }, [panelMounted]);
-
-  useEffect(() => {
-    const highlightId = searchParams.get('highlight');
-    if (!highlightId || !listRootRef.current || projects.length === 0) {
-      return;
-    }
-
-    const card = listRootRef.current.querySelector<HTMLElement>(
-      `[data-leader-project-id="${highlightId}"]`,
-    );
-    if (!card) {
-      return;
-    }
-
-    card.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    card.classList.add('ring-4', 'ring-yellow-400', 'ring-offset-2', 'ring-offset-yellow-50');
-
-    const timeoutId = window.setTimeout(() => {
-      card.classList.remove('ring-4', 'ring-yellow-400', 'ring-offset-2', 'ring-offset-yellow-50');
-    }, 1600);
-
-    return () => {
-      window.clearTimeout(timeoutId);
-    };
-  }, [projects, searchParams, listRootRef]);
 
   useEffect(() => {
     if (!panelMounted) {
@@ -1742,7 +1565,7 @@ export default function ProjectLeaderProjectsPage() {
                   <p className="text-xs text-gray-500">Recently saved proposals appear here so you can review or continue editing.</p>
                 </div>
               </div>
-              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3" ref={listRootRef}>
+              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
                 {projects.map((project) => {
                   const status = project.status || 'Pending';
                   const statusLabel =
@@ -1752,12 +1575,24 @@ export default function ProjectLeaderProjectsPage() {
                       ? 'Rejected'
                       : 'Pending approval';
                   const hasEvaluation = !!project.evaluation;
+                  const isHighlighted = project._id === highlightProjectId;
+                  const isApproved = status === 'Approved';
 
                   return (
                     <div
                       key={project._id}
-                      data-leader-project-id={project._id}
-                      className="flex h-full flex-col rounded-xl border border-yellow-100 bg-white/80 p-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md"
+                      onClick={() => {
+                        if (isApproved) {
+                          openActivitiesModal(project);
+                        }
+                      }}
+                      className={`flex h-full flex-col rounded-2xl border bg-white/90 p-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-lg ${
+                        isHighlighted
+                          ? 'border-yellow-400 shadow-yellow-300 ring-2 ring-yellow-300 animate-pulse'
+                          : 'border-yellow-100'
+                      } ${
+                        isApproved ? 'cursor-pointer' : 'cursor-default'
+                      }`}
                     >
                       <div className="flex-1 space-y-1">
                         <h3 className="text-sm font-semibold text-gray-900 line-clamp-2">{project.name}</h3>
@@ -1765,7 +1600,7 @@ export default function ProjectLeaderProjectsPage() {
                       </div>
                       <div className="mt-4 flex items-center justify-between gap-2 text-xs">
                         <div className="flex flex-col gap-1">
-                          <span className="inline-flex items-center rounded-full bg-yellow-50 px-2 py-1 font-medium text-yellow-700">
+                          <span className="inline-flex items-center rounded-full bg-yellow-50 px-2 py-0.5 font-semibold text-yellow-700">
                             {statusLabel}
                           </span>
                           {hasEvaluation && (
@@ -1777,11 +1612,12 @@ export default function ProjectLeaderProjectsPage() {
                         <div className="relative">
                           <button
                             type="button"
-                            onClick={() =>
+                            onClick={(event) => {
+                              event.stopPropagation();
                               setOptionsOpenProjectId((current) =>
                                 current === project._id ? null : project._id,
-                              )
-                            }
+                              );
+                            }}
                             className="rounded-full border border-yellow-200 px-3 py-1 font-semibold text-yellow-700 transition hover:bg-yellow-50"
                           >
                             Options
@@ -1790,7 +1626,8 @@ export default function ProjectLeaderProjectsPage() {
                             <div className="absolute right-0 z-10 mt-1 w-44 rounded-lg border border-yellow-100 bg-white py-1 text-left text-[11px] shadow-lg">
                               <button
                                 type="button"
-                                onClick={() => {
+                                onClick={(event) => {
+                                  event.stopPropagation();
                                   openReviewPanel(project._id);
                                   setOptionsOpenProjectId(null);
                                 }}
@@ -1798,20 +1635,11 @@ export default function ProjectLeaderProjectsPage() {
                               >
                                 Review project
                               </button>
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  void openParticipantsPanel(project);
-                                  setOptionsOpenProjectId(null);
-                                }}
-                                className="block w-full px-3 py-1.5 text-left text-sky-700 hover:bg-sky-50"
-                              >
-                                View participants
-                              </button>
                               {hasEvaluation && (
                                 <button
                                   type="button"
-                                  onClick={() => {
+                                  onClick={(event) => {
+                                    event.stopPropagation();
                                     setEvaluationViewProject(project);
                                     setOptionsOpenProjectId(null);
                                   }}
@@ -1822,7 +1650,10 @@ export default function ProjectLeaderProjectsPage() {
                               )}
                               <button
                                 type="button"
-                                onClick={() => handleDeleteProject(project._id)}
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  handleDeleteProject(project._id);
+                                }}
                                 className="block w-full px-3 py-1.5 text-left text-red-600 hover:bg-red-50"
                               >
                                 Delete
@@ -1889,7 +1720,7 @@ export default function ProjectLeaderProjectsPage() {
                       : 'Save project'}
                   </button>
                 ) : null}
-                {panelMode === 'review' && (
+                {panelMode === 'review' && currentPanelProjectStatus !== 'Approved' && (
                   <button
                     type="button"
                     onClick={() => setShowEditConfirm(true)}
@@ -1976,6 +1807,9 @@ export default function ProjectLeaderProjectsPage() {
                       type="button"
                       onClick={() => {
                         setShowEditConfirm(false);
+                        if (currentPanelProjectStatus === 'Approved') {
+                          return;
+                        }
                         setPanelMode('edit');
                         setSaveError(null);
                         setSaveMessage(null);
@@ -1992,144 +1826,167 @@ export default function ProjectLeaderProjectsPage() {
         </div>
       )}
 
-      {participantsViewProject && (
+      {activitiesModalOpen && activitiesModalProject && (
         <div
-          className="fixed inset-0 z-30 flex bg-black/40 backdrop-blur-sm"
+          className="fixed inset-0 z-40 flex bg-black/40 backdrop-blur-sm"
           role="dialog"
           aria-modal="true"
         >
           <div
-            className="ml-auto flex h-full w-full max-w-3xl flex-col bg-white shadow-2xl rounded-l-2xl"
+            className="ml-auto flex h-full w-full max-w-md flex-col bg-white shadow-2xl"
             style={{
-              transform: participantsPanelVisible ? 'translateX(0%)' : 'translateX(100%)',
-              transition: `transform ${transitionMs}ms cubic-bezier(0.22, 0.61, 0.36, 1)`,
+              transform: activitiesModalOpen ? 'translateX(0%)' : 'translateX(100%)',
+              transition: 'transform 280ms cubic-bezier(0.22, 0.61, 0.36, 1)',
             }}
           >
-            <div className="flex items-center justify-between border-b border-gray-100 px-5 py-4">
+            <div className="flex items-center justify-between border-b border-yellow-100 px-6 py-4">
               <div>
-                <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">Project participants</p>
-                <h2 className="text-base font-semibold text-gray-900 line-clamp-1">
-                  {participantsViewProject.name}
-                </h2>
-                <p className="text-[11px] text-gray-500 line-clamp-1">
-                  Participants, join requests, and attendance for this project.
-                </p>
+                <p className="text-xs font-semibold uppercase tracking-wide text-yellow-500">Project Activities</p>
+                <h3 className="text-sm font-semibold text-gray-900 line-clamp-1">{activitiesModalProject.name}</h3>
               </div>
-              <div className="flex items-center gap-3">
-                <div className="flex items-center gap-2 text-[11px] text-gray-700">
-                  <span className="font-semibold">Date</span>
-                  <input
-                    type="date"
-                    defaultValue={todayKey()}
-                    onChange={async (event) => {
-                      const value = event.target.value || todayKey();
-                      if (!participantsViewProject) return;
-                      try {
-                        const attendanceRes = await fetch(
-                          `http://localhost:5000/api/attendance/project?projectId=${encodeURIComponent(
-                            participantsViewProject._id,
-                          )}&date=${encodeURIComponent(value)}`,
-                        );
-                        if (attendanceRes.ok) {
-                          const attendanceData = (await attendanceRes.json()) as Array<{
-                            participantId: string;
-                            status: 'Active';
-                          }>;
-
-                          const mapped: Record<string, boolean> = {};
-                          for (const record of attendanceData) {
-                            if (record.participantId) {
-                              mapped[record.participantId] = record.status === 'Active';
-                            }
-                          }
-
-                          setAttendanceByParticipant(mapped);
-                        } else {
-                          setAttendanceByParticipant({});
-                        }
-                      } catch (attendanceError) {
-                        console.error('Failed to load attendance for selected date', attendanceError);
-                        setAttendanceByParticipant({});
-                      }
-                    }}
-                    className="rounded border border-gray-200 px-2 py-1 text-[11px] text-gray-800 focus:border-yellow-400 focus:outline-none focus:ring-1 focus:ring-yellow-300"
-                  />
-                </div>
-                <button
-                  type="button"
-                  onClick={closeParticipantsPanel}
-                  className="rounded-full border border-gray-200 px-3 py-1 text-[11px] font-semibold text-gray-700 hover:bg-gray-50"
-                >
-                  Close
-                </button>
-              </div>
+              <button
+                type="button"
+                onClick={() => setActivitiesModalOpen(false)}
+                className="rounded-full border border-yellow-200 px-3 py-1 text-xs font-semibold text-yellow-700 hover:bg-yellow-50"
+              >
+                Close
+              </button>
             </div>
-            <div className="flex-1 overflow-y-auto px-5 py-5 sm:px-6 text-sm text-gray-800">
-              {participantsLoading ? (
-                <div className="py-10 text-center text-xs text-gray-500">Loading participants…</div>
-              ) : participantsError ? (
-                <div className="py-10 text-center text-xs text-red-600">{participantsError}</div>
-              ) : participantsForProject.length === 0 ? (
-                <div className="py-10 text-center text-xs text-gray-500">
-                  No participants have requested to join this project yet.
-                </div>
+
+            <div className="flex-1 overflow-y-auto px-6 py-5 text-xs text-gray-800">
+              {activitiesForModal.length === 0 ? (
+                <p className="text-xs text-gray-600">
+                  No activities have been defined yet in the Training Design section for this project.
+                </p>
               ) : (
-                <div className="overflow-hidden rounded-xl border border-gray-100">
-                  <div className="overflow-x-auto">
-                    <table className="min-w-full border-collapse text-sm">
-                      <thead>
-                        <tr className="bg-gray-50/80">
-                          <th className="sticky left-0 z-10 border-b border-gray-200 bg-gray-50/90 px-4 py-2 text-left text-[11px] font-semibold uppercase tracking-wide text-gray-500">
-                            Name
-                          </th>
-                          <th className="border-b border-gray-200 px-4 py-2 text-left text-[11px] font-semibold uppercase tracking-wide text-gray-500">
-                            Email
-                          </th>
-                          <th className="border-b border-gray-200 px-4 py-2 text-left text-[11px] font-semibold uppercase tracking-wide text-gray-500">
-                            Attendance
-                          </th>
-                          <th className="border-b border-gray-200 px-4 py-2 text-right text-[11px] font-semibold uppercase tracking-wide text-gray-500">
-                            Requested at
-                          </th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {participantsForProject.map((row) => {
-                        const requestedAtLabel = row.createdAt
-                          ? new Date(row.createdAt).toLocaleString('en-PH', {
-                              dateStyle: 'medium',
-                              timeStyle: 'short',
-                            })
-                          : '';
-
-                        const isActive = !!(row.requesterId && attendanceByParticipant[row.requesterId]);
-                        const attendanceLabel = isActive ? 'Active' : 'Inactive';
-                        const attendanceClass = isActive
-                          ? 'inline-flex items-center rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold text-emerald-700 border border-emerald-200'
-                          : 'inline-flex items-center rounded-full bg-gray-50 px-2 py-0.5 text-[11px] font-semibold text-gray-700 border border-gray-200';
-
-                        return (
-                          <tr key={row.id} className="transition-colors hover:bg-gray-50">
-                            <td className="sticky left-0 z-0 whitespace-nowrap border-b border-gray-100 bg-white px-4 py-2 text-sm font-medium text-gray-900">
-                              {row.requesterName || 'Unknown participant'}
-                            </td>
-                            <td className="border-b border-gray-100 px-4 py-2 align-middle text-sm text-gray-800">
-                              {row.requesterEmail || '—'}
-                            </td>
-                            <td className="border-b border-gray-100 px-4 py-2 align-middle text-sm">
-                              <span className={attendanceClass}>{attendanceLabel}</span>
-                            </td>
-                            <td className="border-b border-gray-100 px-4 py-2 text-right align-middle text-xs text-gray-500">
-                              {requestedAtLabel}
-                            </td>
-                          </tr>
-                        );
-                      })}
-                      </tbody>
-                    </table>
-                  </div>
+                <div className="space-y-3">
+                  {activitiesForModal.map((activity, index) => (
+                    <div
+                      key={`${activity.title}-${index}`}
+                      onClick={() => openAttendanceView(activity)}
+                      className="cursor-pointer rounded-xl border border-yellow-100 bg-yellow-50/40 px-3 py-2 text-left transition hover:-translate-y-0.5 hover:shadow-md"
+                    >
+                      <p className="text-sm font-semibold text-gray-900">{activity.title}</p>
+                      <div className="mt-1 flex flex-wrap gap-3 text-[11px] text-gray-700">
+                        {activity.hours && (
+                          <span className="rounded-full bg-white px-2 py-0.5 font-medium text-yellow-700">
+                            {activity.hours} hrs
+                          </span>
+                        )}
+                        {activity.resourcePerson && (
+                          <span className="rounded-full bg-white px-2 py-0.5 font-medium text-gray-700">
+                            Resource: {activity.resourcePerson}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  ))}
                 </div>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {attendanceViewOpen && attendanceActivity && activitiesModalProject && (
+        <div
+          className="fixed inset-0 z-50 flex bg-black/50 backdrop-blur-sm"
+          role="dialog"
+          aria-modal="true"
+        >
+          <div className="mx-auto my-8 flex h-[calc(100%-4rem)] w-full max-w-5xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
+            <div className="flex items-center justify-between border-b border-yellow-100 px-6 py-4">
+              <div className="space-y-1">
+                <p className="text-xs font-semibold uppercase tracking-wide text-yellow-500">Activity Attendance</p>
+                <h2 className="text-sm font-semibold text-gray-900 line-clamp-1">{attendanceActivity.title}</h2>
+                <p className="text-[11px] text-gray-500 line-clamp-1">Project: {activitiesModalProject.name}</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setAttendanceViewOpen(false)}
+                className="rounded-full border border-yellow-200 px-3 py-1 text-xs font-semibold text-yellow-700 hover:bg-yellow-50"
+              >
+                Close
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto px-6 py-5 text-xs text-gray-800">
+              <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+                <div className="space-y-1">
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">Summary</p>
+                  <p className="text-xs text-gray-700">
+                    Use this view to track which beneficiaries attended this activity once they register and are approved.
+                  </p>
+                </div>
+                <div className="flex flex-wrap gap-2 text-[11px]">
+                  <span className="inline-flex items-center rounded-full border border-yellow-200 bg-yellow-50 px-2 py-0.5 font-semibold text-yellow-700">
+                    Planned resource: {attendanceActivity.resourcePerson || '—'}
+                  </span>
+                  {attendanceActivity.hours && (
+                    <span className="inline-flex items-center rounded-full border border-yellow-200 bg-white px-2 py-0.5 font-semibold text-yellow-700">
+                      {attendanceActivity.hours} hrs
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <h3 className="text-sm font-semibold text-gray-900">Participants</h3>
+                  <span className="text-[11px] text-gray-500">
+                    Attendance tracking will appear here once participants can join this activity.
+                  </span>
+                </div>
+
+                <div className="overflow-x-auto rounded-xl border border-yellow-100 bg-yellow-50/40">
+                  <table className="min-w-full text-left text-xs text-gray-800">
+                    <thead className="bg-yellow-50 text-[11px] font-semibold uppercase tracking-wide text-gray-600">
+                      <tr>
+                        <th className="px-3 py-2">Name</th>
+                        <th className="px-3 py-2">Email</th>
+                        <th className="px-3 py-2">Status</th>
+                        <th className="px-3 py-2 text-center">Present</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr>
+                        <td className="px-3 py-3 text-gray-500" colSpan={4}>
+                          No participants are linked to this activity yet. Once you have a registration and
+                          beneficiary flow, they can be listed here with checkboxes for attendance per session.
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showSubmitSuccess && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" role="dialog" aria-modal="true">
+          <div className="w-full max-w-sm rounded-2xl border border-yellow-100 bg-white p-6 shadow-xl">
+            <div className="mb-3 flex items-center gap-3">
+              <div className="flex h-9 w-9 items-center justify-center rounded-full bg-emerald-100 text-emerald-600">
+                <CheckCircle2 className="h-5 w-5" />
+              </div>
+              <div>
+                <h3 className="text-sm font-semibold text-gray-900">Project submitted</h3>
+                <p className="text-[11px] text-gray-500">Your proposal has been sent to the admin for review.</p>
+              </div>
+            </div>
+            <p className="text-xs text-gray-700">
+              The project has been submitted, wait for the admin approval.
+            </p>
+            <div className="mt-4 flex justify-end gap-2 text-xs">
+              <button
+                type="button"
+                onClick={() => setShowSubmitSuccess(false)}
+                className="rounded-full border border-gray-200 px-3 py-1 font-semibold text-gray-700 hover:bg-gray-50"
+              >
+                Close
+              </button>
             </div>
           </div>
         </div>

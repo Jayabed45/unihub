@@ -1,8 +1,8 @@
 'use client';
 
 import { ReactNode, useCallback, useEffect, useRef, useState } from 'react';
-import { useRouter } from 'next/navigation';
 import { io, type Socket } from 'socket.io-client';
+import { useRouter } from 'next/navigation';
 
 import Sidebar from './components/Sidebar';
 import HeaderBar from './components/HeaderBar';
@@ -24,17 +24,11 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
   const [logoutProgress, setLogoutProgress] = useState(0);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
+  const [toastNotification, setToastNotification] = useState<NotificationItem | null>(null);
+  const [toastVisible, setToastVisible] = useState(false);
+  const previousNotificationIdsRef = useRef<string[]>([]);
+  const initialNotificationsLoadedRef = useRef(false);
   const socketRef = useRef<Socket | null>(null);
-
-  const markNotificationRead = useCallback(async (id: string) => {
-    try {
-      await fetch(`http://localhost:5000/api/notifications/${encodeURIComponent(id)}/read`, {
-        method: 'PATCH',
-      });
-    } catch (error) {
-      console.error('Failed to mark admin notification as read', error);
-    }
-  }, []);
 
   const handleLogout = useCallback(() => {
     if (isLoggingOut) return;
@@ -89,9 +83,9 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
           _id: string;
           title: string;
           message: string;
-          project?: string;
           read?: boolean;
           createdAt?: string;
+          project?: string;
         }>;
 
         const mapped: NotificationItem[] = data.map((item) => ({
@@ -105,7 +99,7 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
               })
             : '',
           read: item.read,
-          projectId: (item as any).project ? String((item as any).project) : undefined,
+          projectId: item.project,
         }));
 
         setNotifications(mapped);
@@ -118,76 +112,57 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
-    try {
-      const stored = window.localStorage.getItem(STORAGE_KEY);
-      if (!stored) {
-        return;
-      }
+    const socket = io('http://localhost:5000');
+    socketRef.current = socket;
 
-      const parsed = JSON.parse(stored) as StoredUser | null;
-      if (!parsed || !parsed.id) {
-        return;
-      }
-
-      const socket = io('http://localhost:5000');
-      socketRef.current = socket;
-
-      socket.emit('notifications:subscribe', {
-        userId: parsed.id,
-        role: parsed.role,
+    socket.on('notification:new', (payload: NotificationItem) => {
+      setNotifications((prev) => {
+        if (prev.some((n) => n.id === payload.id)) {
+          return prev;
+        }
+        return [payload, ...prev];
       });
+    });
 
-      const handleRefresh = () => {
-        const run = async () => {
-          try {
-            const res = await fetch('http://localhost:5000/api/notifications');
-            if (!res.ok) {
-              return;
-            }
-
-            const data = (await res.json()) as Array<{
-              _id: string;
-              title: string;
-              message: string;
-              project?: string;
-              read?: boolean;
-              createdAt?: string;
-            }>;
-
-            const mapped: NotificationItem[] = data.map((item) => ({
-              id: item._id,
-              title: item.title,
-              message: item.message,
-              timestamp: item.createdAt
-                ? new Date(item.createdAt).toLocaleString('en-PH', {
-                    dateStyle: 'medium',
-                    timeStyle: 'short',
-                  })
-                : '',
-              read: item.read,
-              projectId: (item as any).project ? String((item as any).project) : undefined,
-            }));
-
-            setNotifications(mapped);
-          } catch (error) {
-            console.error('Failed to load admin notifications', error);
-          }
-        };
-
-        void run();
-      };
-
-      socket.on('notifications:refresh', handleRefresh);
-
-      return () => {
-        socket.off('notifications:refresh', handleRefresh);
-        socket.disconnect();
-        socketRef.current = null;
-      };
-    } catch {
-      // ignore socket setup errors on client
-    }
+    return () => {
+      socket.disconnect();
+      socketRef.current = null;
+    };
   }, []);
+
+  useEffect(() => {
+    if (!notifications.length) {
+      previousNotificationIdsRef.current = [];
+      return;
+    }
+
+    const currentIds = notifications.map((n) => n.id);
+
+    if (!initialNotificationsLoadedRef.current) {
+      initialNotificationsLoadedRef.current = true;
+      previousNotificationIdsRef.current = currentIds;
+      return;
+    }
+
+    const previousIds = previousNotificationIdsRef.current;
+    const newOnes = notifications.filter((n) => !previousIds.includes(n.id));
+
+    if (newOnes.length > 0) {
+      const latest = newOnes[0];
+      setToastNotification(latest);
+      setToastVisible(true);
+
+      // Hide after 5 seconds with smooth slide-out animation
+      window.setTimeout(() => {
+        setToastVisible(false);
+        window.setTimeout(() => {
+          setToastNotification((current) => (current && current.id === latest.id ? null : current));
+        }, 400);
+      }, 5000);
+    }
+
+    previousNotificationIdsRef.current = currentIds;
+  }, [notifications]);
 
   useEffect(() => {
     if (!isLoggingOut) {
@@ -200,7 +175,6 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
         if (prev >= 90) {
           return prev;
         }
-
         const nextValue = prev + Math.random() * 15;
         return Math.min(nextValue, 90);
       });
@@ -210,6 +184,54 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
       window.clearInterval(interval);
     };
   }, [isLoggingOut]);
+
+  const handleToggleNotifications = useCallback(() => {
+    setNotificationsOpen((prev) => {
+      const next = !prev;
+      if (!prev && next) {
+        setNotifications((current) => {
+          if (!current.some((n) => !n.read)) {
+            return current;
+          }
+
+          window
+            .fetch('http://localhost:5000/api/notifications/mark-read-all', {
+              method: 'POST',
+            })
+            .catch((error) => {
+              console.error('Failed to mark all notifications as read', error);
+            });
+
+          return current.map((n) => ({ ...n, read: true }));
+        });
+      }
+      return next;
+    });
+  }, []);
+
+  const handleNotificationClick = useCallback(
+    (item: NotificationItem) => {
+      setNotificationsOpen(false);
+
+      setNotifications((current) => current.map((n) => (n.id === item.id ? { ...n, read: true } : n)));
+
+      setToastNotification((current) => (current && current.id === item.id ? null : current));
+      setToastVisible(false);
+
+      window
+        .fetch(`http://localhost:5000/api/notifications/${item.id}/read`, {
+          method: 'PATCH',
+        })
+        .catch((error) => {
+          console.error('Failed to mark notification as read', error);
+        });
+
+      if (item.projectId) {
+        router.push(`/admin/projects?highlightProjectId=${item.projectId}`);
+      }
+    },
+    [router],
+  );
 
   if (!isAuthorized && !isLoggingOut) {
     return null;
@@ -229,7 +251,7 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
 
       <main className="flex-1">
         <HeaderBar
-          onToggleNotifications={() => setNotificationsOpen((prev) => !prev)}
+          onToggleNotifications={handleToggleNotifications}
           notificationsOpen={notificationsOpen}
           notificationsCount={notifications.filter((item) => !item.read).length}
         />
@@ -242,21 +264,29 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
         isOpen={notificationsOpen}
         onClose={() => setNotificationsOpen(false)}
         notifications={notifications}
-        onNotificationClick={(item) => {
-          setNotifications((prev) =>
-            prev.map((n) => (n.id === item.id ? { ...n, read: true } : n)),
-          );
-
-          markNotificationRead(item.id);
-
-          if (item.projectId) {
-            router.push(`/admin/projects?highlight=${encodeURIComponent(item.projectId)}`);
-          }
-
-          setNotificationsOpen(false);
-        }}
         onClear={() => setNotifications([])}
+        onNotificationClick={handleNotificationClick}
       />
+
+      {toastNotification && (
+        <div className="pointer-events-none fixed bottom-6 right-6 z-40 flex max-w-sm flex-col gap-2 text-sm text-gray-900">
+          <div
+            className={`pointer-events-auto flex items-start gap-3 rounded-2xl border border-amber-200 bg-white/95 px-4 py-3 shadow-lg shadow-amber-100 transition-all duration-400 ease-out ${
+              toastVisible ? 'translate-x-0 opacity-100' : 'translate-x-full opacity-0'
+            }`}
+          >
+            <div className="mt-0.5 flex h-7 w-7 items-center justify-center rounded-full bg-amber-100 text-amber-600">
+              <span className="text-xs font-bold">!</span>
+            </div>
+            <div className="flex-1 space-y-1">
+              <p className="text-xs font-semibold uppercase tracking-wide text-amber-700">
+                {toastNotification.title}
+              </p>
+              <p className="text-xs text-gray-800">{toastNotification.message}</p>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

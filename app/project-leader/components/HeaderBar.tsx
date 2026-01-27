@@ -20,7 +20,7 @@ const dateFormatter = new Intl.DateTimeFormat('en-US', {
   year: 'numeric',
 });
 
-interface ProjectLeaderHeaderBarProps {
+interface HeaderBarProps {
   onToggleNotifications?: () => void;
   notificationsCount?: number;
   notificationsOpen?: boolean;
@@ -30,7 +30,7 @@ export default function HeaderBar({
   onToggleNotifications,
   notificationsCount = 0,
   notificationsOpen,
-}: ProjectLeaderHeaderBarProps) {
+}: HeaderBarProps) {
   const pathname = usePathname();
   const [now, setNow] = useState(() => new Date());
 

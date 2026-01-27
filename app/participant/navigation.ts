@@ -3,15 +3,15 @@ import { LayoutGrid, FolderKanban } from 'lucide-react';
 export const participantNavigation = [
   {
     name: 'Feeds',
-    description: 'Announcements and updates for your projects.',
+    description: 'Announcements and featured extension opportunities.',
     icon: LayoutGrid,
     href: '/participant/Feeds',
   },
   {
-    name: 'Projects',
-    description: 'Projects where you are a participant.',
+    name: 'Opportunities',
+    description: 'Browse and join approved projects and activities.',
     icon: FolderKanban,
-    href: '/participant/projects',
+    href: '/participant/Opportunities',
   },
 ] as const;
 

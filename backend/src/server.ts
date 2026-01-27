@@ -3,13 +3,10 @@ import mongoose from 'mongoose';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import http from 'http';
-import { Server as SocketIOServer } from 'socket.io';
 import authRoutes from './routes/auth';
 import projectRoutes from './routes/project';
 import notificationRoutes from './routes/notification';
-import attendanceRoutes from './routes/attendance';
-import presenceRoutes from './routes/presence';
-import { initNotificationSocket } from './socket';
+import { initSocket } from './socket';
 
 dotenv.config();
 
@@ -23,8 +20,6 @@ app.use(express.json({ limit: '5mb' }));
 app.use('/api/auth', authRoutes);
 app.use('/api/projects', projectRoutes);
 app.use('/api/notifications', notificationRoutes);
-app.use('/api/attendance', attendanceRoutes);
-app.use('/api/presence', presenceRoutes);
 
 const uri = process.env.MONGO_URI;
 
@@ -42,16 +37,8 @@ connection.once('open', () => {
 
 const server = http.createServer(app);
 
-const io = new SocketIOServer(server, {
-  cors: {
-    origin: 'http://localhost:3000',
-    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
-  },
-});
-
-initNotificationSocket(io);
-
-console.log('Socket is running');
+// Initialize Socket.IO
+initSocket(server);
 
 server.listen(port, () => {
   console.log(`Server is running on port: ${port}`);

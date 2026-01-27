@@ -16,10 +16,15 @@ interface NotificationsPanelProps {
   onClose: () => void;
   notifications?: NotificationItem[];
   onClear?: () => void;
-  onNotificationClick?: (item: NotificationItem) => void;
 }
 
-export default function NotificationsPanel({ isOpen, onClose, notifications = [], onClear, onNotificationClick }: NotificationsPanelProps) {
+export default function NotificationsPanel({
+  isOpen,
+  onClose,
+  notifications = [],
+  onClear,
+  onNotificationClick,
+}: NotificationsPanelProps & { onNotificationClick?: (item: NotificationItem) => void }) {
   return (
     <div
       className={`fixed inset-y-0 right-0 z-50 flex w-full max-w-sm transform flex-col bg-white shadow-2xl transition-transform duration-300 ease-out ${
@@ -55,9 +60,7 @@ export default function NotificationsPanel({ isOpen, onClose, notifications = []
           notifications.map((item) => (
             <article
               key={item.id}
-              role={onNotificationClick ? 'button' : undefined}
-              tabIndex={onNotificationClick ? 0 : undefined}
-              onClick={onNotificationClick ? () => onNotificationClick(item) : undefined}
+              onClick={() => onNotificationClick?.(item)}
               className={`cursor-pointer rounded-2xl border px-4 py-3 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md ${
                 item.read ? 'border-amber-50 bg-white' : 'border-amber-200 bg-amber-50/60'
               }`}

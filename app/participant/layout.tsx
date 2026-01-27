@@ -1,13 +1,11 @@
 'use client';
 
-import { ReactNode, useCallback, useEffect, useRef, useState } from 'react';
+import { ReactNode, useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { io, type Socket } from 'socket.io-client';
 
-import ParticipantSidebar from './components/Sidebar';
-import ParticipantHeaderBar from './components/HeaderBar';
+import Sidebar from './components/Sidebar';
+import HeaderBar from './components/HeaderBar';
 import { participantNavigation } from './navigation';
-import NotificationsPanel, { type NotificationItem } from '../admin/components/NotificationsPanel';
 
 const STORAGE_KEY = 'unihub-auth';
 
@@ -22,19 +20,6 @@ export default function ParticipantLayout({ children }: { children: ReactNode })
   const [isAuthorized, setIsAuthorized] = useState(false);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
   const [logoutProgress, setLogoutProgress] = useState(0);
-  const [notificationsOpen, setNotificationsOpen] = useState(false);
-  const [notifications, setNotifications] = useState<NotificationItem[]>([]);
-  const socketRef = useRef<Socket | null>(null);
-
-  const markNotificationRead = useCallback(async (id: string) => {
-    try {
-      await fetch(`http://localhost:5000/api/notifications/${encodeURIComponent(id)}/read`, {
-        method: 'PATCH',
-      });
-    } catch (error) {
-      console.error('Failed to mark participant notification as read', error);
-    }
-  }, []);
 
   const handleLogout = useCallback(() => {
     if (isLoggingOut) return;
@@ -78,90 +63,6 @@ export default function ParticipantLayout({ children }: { children: ReactNode })
   }, [router]);
 
   useEffect(() => {
-    const run = async () => {
-      try {
-        const stored = window.localStorage.getItem(STORAGE_KEY);
-        if (!stored) {
-          return;
-        }
-
-        const parsed = JSON.parse(stored) as StoredUser | null;
-        if (!parsed || !parsed.id) {
-          return;
-        }
-
-        const fetchNotifications = async () => {
-          try {
-            const res = await fetch(
-              `http://localhost:5000/api/notifications?recipient=${encodeURIComponent(parsed.id)}`,
-            );
-            if (!res.ok) {
-              return;
-            }
-
-            const data = (await res.json()) as Array<{
-              _id: string;
-              title: string;
-              message: string;
-              project?: string;
-              read?: boolean;
-              createdAt?: string;
-            }>;
-
-            const mapped: NotificationItem[] = data.map((item) => ({
-              id: item._id,
-              title: item.title,
-              message: item.message,
-              timestamp: item.createdAt
-                ? new Date(item.createdAt).toLocaleString('en-PH', {
-                    dateStyle: 'medium',
-                    timeStyle: 'short',
-                  })
-                : '',
-              read: item.read,
-              projectId: (item as any).project ? String((item as any).project) : undefined,
-            }));
-
-            setNotifications(mapped);
-          } catch (error) {
-            console.error('Failed to load participant notifications', error);
-          }
-        };
-
-        await fetchNotifications();
-
-        try {
-          const socket = io('http://localhost:5000');
-          socketRef.current = socket;
-
-          socket.emit('notifications:subscribe', {
-            userId: parsed.id,
-            role: parsed.role,
-          });
-
-          const handleRefresh = () => {
-            void fetchNotifications();
-          };
-
-          socket.on('notifications:refresh', handleRefresh);
-
-          return () => {
-            socket.off('notifications:refresh', handleRefresh);
-            socket.disconnect();
-            socketRef.current = null;
-          };
-        } catch {
-          // ignore socket setup errors on client
-        }
-      } catch (error) {
-        console.error('Failed to load participant notifications', error);
-      }
-    };
-
-    run();
-  }, []);
-
-  useEffect(() => {
     if (!isLoggingOut) {
       setLogoutProgress(0);
       return;
@@ -172,7 +73,6 @@ export default function ParticipantLayout({ children }: { children: ReactNode })
         if (prev >= 90) {
           return prev;
         }
-
         const nextValue = prev + Math.random() * 15;
         return Math.min(nextValue, 90);
       });
@@ -198,35 +98,12 @@ export default function ParticipantLayout({ children }: { children: ReactNode })
         </div>
       )}
 
-      <ParticipantSidebar items={participantNavigation} onLogout={handleLogout} logoutDisabled={isLoggingOut} />
+      <Sidebar items={participantNavigation} onLogout={handleLogout} logoutDisabled={isLoggingOut} />
 
       <main className="flex-1">
-        <ParticipantHeaderBar
-          onToggleNotifications={() => setNotificationsOpen((prev) => !prev)}
-          notificationsOpen={notificationsOpen}
-          notificationsCount={notifications.filter((item) => !item.read).length}
-        />
+        <HeaderBar />
         <div className="mx-auto max-w-6xl px-6 py-10">{children}</div>
       </main>
-
-      <NotificationsPanel
-        isOpen={notificationsOpen}
-        onClose={() => setNotificationsOpen(false)}
-        notifications={notifications}
-        onNotificationClick={(item) => {
-          setNotifications((prev) =>
-            prev.map((n) => (n.id === item.id ? { ...n, read: true } : n)),
-          );
-
-          markNotificationRead(item.id);
-
-          setNotificationsOpen(false);
-
-          if (item.projectId) {
-            router.push(`/participant/Feeds?projectId=${encodeURIComponent(item.projectId)}`);
-          }
-        }}
-      />
     </div>
   );
 }
