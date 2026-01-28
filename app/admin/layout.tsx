@@ -15,6 +15,7 @@ interface StoredUser {
   id: string;
   role: string;
   token: string;
+  email?: string;
 }
 
 export default function AdminLayout({ children }: { children: ReactNode }) {
@@ -88,19 +89,26 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
           project?: string;
         }>;
 
-        const mapped: NotificationItem[] = data.map((item) => ({
-          id: item._id,
-          title: item.title,
-          message: item.message,
-          timestamp: item.createdAt
-            ? new Date(item.createdAt).toLocaleString('en-PH', {
-                dateStyle: 'medium',
-                timeStyle: 'short',
-              })
-            : '',
-          read: item.read,
-          projectId: item.project,
-        }));
+        const mapped: NotificationItem[] = data
+          .map((item) => ({
+            id: item._id,
+            title: item.title,
+            message: item.message,
+            timestamp: item.createdAt
+              ? new Date(item.createdAt).toLocaleString('en-PH', {
+                  dateStyle: 'medium',
+                  timeStyle: 'short',
+                })
+              : '',
+            read: item.read,
+            projectId: item.project,
+          }))
+          .filter(
+            (item) =>
+              item.title !== 'Project approved' &&
+              item.title !== 'Activity join' &&
+              item.title !== 'Join request approved',
+          );
 
         setNotifications(mapped);
       } catch (error) {
@@ -116,6 +124,14 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
     socketRef.current = socket;
 
     socket.on('notification:new', (payload: NotificationItem) => {
+      if (
+        payload.title === 'Project approved' ||
+        payload.title === 'Activity join' ||
+        payload.title === 'Join request approved'
+      ) {
+        return;
+      }
+
       setNotifications((prev) => {
         if (prev.some((n) => n.id === payload.id)) {
           return prev;
@@ -145,7 +161,9 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
     }
 
     const previousIds = previousNotificationIdsRef.current;
-    const newOnes = notifications.filter((n) => !previousIds.includes(n.id));
+    const newOnes = notifications.filter(
+      (n) => !previousIds.includes(n.id) && n.title !== 'Project approved',
+    );
 
     if (newOnes.length > 0) {
       const latest = newOnes[0];

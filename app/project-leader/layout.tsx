@@ -15,6 +15,7 @@ interface StoredUser {
   id: string;
   role: string;
   token: string;
+  email?: string;
 }
 
 export default function ProjectLeaderLayout({ children }: { children: ReactNode }) {
@@ -102,7 +103,12 @@ export default function ProjectLeaderLayout({ children }: { children: ReactNode 
             read: item.read,
             projectId: item.project,
           }))
-          .filter((item) => item.title !== 'New project created');
+          .filter(
+            (item) =>
+              item.title !== 'New project created' &&
+              item.title !== 'Join request approved' &&
+              item.title !== 'Join request declined',
+          );
 
         setNotifications(mapped);
       } catch (error) {
@@ -118,8 +124,12 @@ export default function ProjectLeaderLayout({ children }: { children: ReactNode 
     socketRef.current = socket;
 
     socket.on('notification:new', (payload: NotificationItem) => {
-      // Respect the existing filter: do not show "New project created" on leader side
-      if (payload.title === 'New project created') {
+      // Respect the existing filter: do not show certain system-wide notifications on leader side
+      if (
+        payload.title === 'New project created' ||
+        payload.title === 'Join request approved' ||
+        payload.title === 'Join request declined'
+      ) {
         return;
       }
 
@@ -152,7 +162,9 @@ export default function ProjectLeaderLayout({ children }: { children: ReactNode 
     }
 
     const previousIds = previousNotificationIdsRef.current;
-    const newOnes = notifications.filter((n) => !previousIds.includes(n.id));
+    const newOnes = notifications.filter(
+      (n) => !previousIds.includes(n.id) && n.title !== 'Project approved',
+    );
 
     if (newOnes.length > 0) {
       const latest = newOnes[0];
@@ -234,7 +246,9 @@ export default function ProjectLeaderLayout({ children }: { children: ReactNode 
           console.error('Failed to mark notification as read', error);
         });
 
-      if (item.projectId) {
+      if (item.title === 'Join request') {
+        router.push('/project-leader/participants');
+      } else if (item.projectId) {
         router.push(`/project-leader/projects?highlightProjectId=${item.projectId}`);
       }
     },

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { io, type Socket } from "socket.io-client";
 import { useSearchParams } from "next/navigation";
 
 interface AdminProject {
@@ -14,6 +15,7 @@ export default function AdminProjectsPage() {
   const [projects, setProjects] = useState<AdminProject[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
   const [viewerMounted, setViewerMounted] = useState(false);
   const [viewerVisible, setViewerVisible] = useState(false);
   const [viewerProject, setViewerProject] = useState<AdminProject | null>(null);
@@ -23,6 +25,13 @@ export default function AdminProjectsPage() {
   const [activeSectionId, setActiveSectionId] = useState<string>('project-summary');
   const [evaluateMounted, setEvaluateMounted] = useState(false);
   const [evaluateVisible, setEvaluateVisible] = useState(false);
+  const [beneficiariesOpen, setBeneficiariesOpen] = useState(false);
+  const [beneficiariesProject, setBeneficiariesProject] = useState<AdminProject | null>(null);
+  const [beneficiaries, setBeneficiaries] = useState<
+    Array<{ email: string; status: 'active' | 'removed'; joinedAt?: string; updatedAt?: string }>
+  >([]);
+  const [beneficiariesLoading, setBeneficiariesLoading] = useState(false);
+  const [beneficiariesError, setBeneficiariesError] = useState<string | null>(null);
 
   const [evaluationTitle, setEvaluationTitle] = useState('');
   const [evaluationCampus, setEvaluationCampus] = useState('');
@@ -36,6 +45,7 @@ export default function AdminProjectsPage() {
   const [evaluationError, setEvaluationError] = useState<string | null>(null);
 
   const viewerRootRef = useRef<HTMLDivElement | null>(null);
+  const socketRef = useRef<Socket | null>(null);
 
   const searchParams = useSearchParams();
   const highlightProjectId = searchParams.get('highlightProjectId');
@@ -68,26 +78,46 @@ export default function AdminProjectsPage() {
     { label: 'XII. Over-all impression (The project is worth conducting.)' },
   ];
 
-  useEffect(() => {
-    const run = async () => {
-      setLoading(true);
-      setError(null);
-      try {
-        const res = await fetch("http://localhost:5000/api/projects");
-        if (!res.ok) {
-          const data = await res.json().catch(() => ({}));
-          throw new Error(data.message || "Failed to load projects");
-        }
-        const data = (await res.json()) as AdminProject[];
-        setProjects(data);
-      } catch (err: any) {
-        setError(err.message || "Failed to load projects");
-      } finally {
-        setLoading(false);
+  const fetchProjects = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch("http://localhost:5000/api/projects");
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.message || "Failed to load projects");
       }
-    };
+      const data = (await res.json()) as AdminProject[];
+      setProjects(data);
+    } catch (err: any) {
+      setError(err.message || "Failed to load projects");
+    } finally {
+      setLoading(false);
+    }
+  };
 
-    run();
+  useEffect(() => {
+    fetchProjects();
+  }, []);
+
+  useEffect(() => {
+    const socket = io("http://localhost:5000");
+    socketRef.current = socket;
+
+    socket.on("notification:new", (payload: any) => {
+      if (!payload || typeof payload.title !== "string") {
+        return;
+      }
+
+      if (payload.title === "New project created") {
+        fetchProjects();
+      }
+    });
+
+    return () => {
+      socket.disconnect();
+      socketRef.current = null;
+    };
   }, []);
 
   useEffect(() => {
@@ -127,6 +157,49 @@ export default function AdminProjectsPage() {
       cancelled = true;
     };
   }, [viewerMounted, viewerProject]);
+
+  useEffect(() => {
+    if (!beneficiariesOpen || !beneficiariesProject) return;
+
+    let cancelled = false;
+
+    const run = async () => {
+      setBeneficiariesLoading(true);
+      setBeneficiariesError(null);
+      try {
+        const res = await fetch(`http://localhost:5000/api/projects/${beneficiariesProject._id}/beneficiaries`);
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          throw new Error(data.message || 'Failed to load beneficiaries');
+        }
+
+        const data = (await res.json()) as Array<{
+          email: string;
+          status: 'active' | 'removed';
+          joinedAt?: string;
+          updatedAt?: string;
+        }>;
+
+        if (!cancelled) {
+          setBeneficiaries(data);
+        }
+      } catch (err: any) {
+        if (!cancelled) {
+          setBeneficiariesError(err.message || 'Failed to load beneficiaries');
+        }
+      } finally {
+        if (!cancelled) {
+          setBeneficiariesLoading(false);
+        }
+      }
+    };
+
+    run();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [beneficiariesOpen, beneficiariesProject]);
 
   useEffect(() => {
     if (!viewerVisible || !viewerData || !viewerRootRef.current) {
@@ -326,17 +399,29 @@ export default function AdminProjectsPage() {
                       >
                         {statusLabel}
                       </span>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setViewerProject(project);
-                          setViewerMounted(true);
-                          window.setTimeout(() => setViewerVisible(true), 20);
-                        }}
-                        className="rounded-full border border-amber-200 px-3 py-1 text-xs font-semibold text-amber-700 transition hover:bg-amber-50"
-                      >
-                        View
-                      </button>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setBeneficiariesProject(project);
+                            setBeneficiariesOpen(true);
+                          }}
+                          className="rounded-full border border-amber-200 px-3 py-1 text-xs font-semibold text-amber-700 transition hover:bg-amber-50"
+                        >
+                          Beneficiaries
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setViewerProject(project);
+                            setViewerMounted(true);
+                            window.setTimeout(() => setViewerVisible(true), 20);
+                          }}
+                          className="rounded-full border border-amber-200 px-3 py-1 text-xs font-semibold text-amber-700 transition hover:bg-amber-50"
+                        >
+                          View
+                        </button>
+                      </div>
                     </div>
                   </div>
                 );
@@ -372,7 +457,13 @@ export default function AdminProjectsPage() {
               <div className="flex items-center gap-2">
                 <button
                   type="button"
+                  disabled={
+                    !!viewerProject?.status && viewerProject.status !== 'Pending'
+                  }
                   onClick={() => {
+                    if (viewerProject?.status && viewerProject.status !== 'Pending') {
+                      return;
+                    }
                     setEvaluationTitle(viewerProject?.name || '');
                     setEvaluationCampus('');
                     setEvaluationRatings(new Array(evaluationCriteria.length).fill(NaN));
@@ -384,7 +475,7 @@ export default function AdminProjectsPage() {
                     setEvaluateMounted(true);
                     window.setTimeout(() => setEvaluateVisible(true), 20);
                   }}
-                  className="rounded-full bg-amber-500 px-3 py-1 text-xs font-semibold text-white shadow hover:bg-amber-600"
+                  className="rounded-full bg-amber-500 px-3 py-1 text-xs font-semibold text-white shadow hover:bg-amber-600 disabled:cursor-not-allowed disabled:opacity-70"
                 >
                   Evaluate project
                 </button>
@@ -698,6 +789,107 @@ export default function AdminProjectsPage() {
           </div>
         </div>
       )}
+
+      {beneficiariesProject && (
+        <div
+          className="fixed inset-0 z-40 flex bg-black/40 backdrop-blur-sm"
+          style={{
+            opacity: beneficiariesOpen ? 1 : 0,
+            pointerEvents: beneficiariesOpen ? 'auto' : 'none',
+            transition: 'opacity 220ms ease-in-out',
+          }}
+        >
+          <div
+            className="ml-auto flex h-full w-full max-w-2xl flex-col bg-white shadow-2xl"
+            style={{
+              transform: beneficiariesOpen ? 'translateX(0%)' : 'translateX(100%)',
+              transition: 'transform 260ms cubic-bezier(0.22, 0.61, 0.36, 1)',
+            }}
+          >
+            <div className="flex items-center justify-between border-b border-amber-100 px-5 py-3">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wide text-amber-500">Project beneficiaries</p>
+                <h2 className="text-sm font-semibold text-gray-900">
+                  {beneficiariesProject.name}
+                </h2>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setBeneficiariesOpen(false);
+                }}
+                className="rounded-full border border-amber-200 px-3 py-1 text-xs font-semibold text-amber-700 hover:bg-amber-50"
+              >
+                Close
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto px-5 py-4 text-sm text-gray-800">
+              {beneficiariesLoading ? (
+                <div className="text-xs text-gray-600">Loading beneficiaries…</div>
+              ) : beneficiariesError ? (
+                <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs font-medium text-red-700">
+                  {beneficiariesError}
+                </div>
+              ) : beneficiaries.length === 0 ? (
+                <div className="text-xs text-gray-600">
+                  No beneficiaries have been recorded for this project yet.
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="min-w-full border border-amber-100 text-xs">
+                    <thead>
+                      <tr className="bg-amber-50">
+                        <th className="border border-amber-100 px-3 py-2 text-left font-semibold text-gray-700">
+                          Email
+                        </th>
+                        <th className="border border-amber-100 px-3 py-2 text-left font-semibold text-gray-700">
+                          Status
+                        </th>
+                        <th className="border border-amber-100 px-3 py-2 text-left font-semibold text-gray-700">
+                          Joined at
+                        </th>
+                        <th className="border border-amber-100 px-3 py-2 text-left font-semibold text-gray-700">
+                          Last updated
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {beneficiaries.map((row) => {
+                        const statusColor =
+                          row.status === 'active'
+                            ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                            : 'bg-red-50 text-red-700 border-red-200';
+
+                        return (
+                          <tr key={row.email} className="align-top">
+                            <td className="border border-amber-100 px-3 py-2 text-[11px] sm:text-xs">
+                              {row.email}
+                            </td>
+                            <td className="border border-amber-100 px-3 py-2 text-[11px] sm:text-xs">
+                              <span
+                                className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${statusColor}`}
+                              >
+                                {row.status === 'active' ? 'Active' : 'Removed'}
+                              </span>
+                            </td>
+                            <td className="border border-amber-100 px-3 py-2 text-[11px] sm:text-xs">
+                              {row.joinedAt || ' '}
+                            </td>
+                            <td className="border border-amber-100 px-3 py-2 text-[11px] sm:text-xs">
+                              {row.updatedAt || ' '}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }

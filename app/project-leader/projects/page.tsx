@@ -1,7 +1,9 @@
+
 'use client';
 
 import { useMemo, useState, useEffect, useRef, Fragment } from 'react';
 import { usePathname, useSearchParams } from 'next/navigation';
+import { io, type Socket } from 'socket.io-client';
 import { PlusCircle, Filter, CalendarDays, CheckCircle2 } from 'lucide-react';
 
 import { projectLeaderNavigation } from '../navigation';
@@ -69,6 +71,7 @@ interface LeaderProject {
 }
 
 interface ProjectActivity {
+  activityId: number;
   title: string;
   hours?: string;
   resourcePerson?: string;
@@ -111,6 +114,20 @@ export default function ProjectLeaderProjectsPage() {
   const [activitiesForModal, setActivitiesForModal] = useState<ProjectActivity[]>([]);
   const [attendanceViewOpen, setAttendanceViewOpen] = useState(false);
   const [attendanceActivity, setAttendanceActivity] = useState<ProjectActivity | null>(null);
+  const [attendanceRows, setAttendanceRows] = useState<
+    Array<{ participantEmail: string; status: 'registered' | 'present' | 'absent'; updatedAt?: string }>
+  >([]);
+  const [attendanceLoading, setAttendanceLoading] = useState(false);
+  const [attendanceError, setAttendanceError] = useState<string | null>(null);
+  const [attendanceUpdatingEmail, setAttendanceUpdatingEmail] = useState<string | null>(null);
+  const socketRef = useRef<Socket | null>(null);
+  const [highlightedProjectActivity, setHighlightedProjectActivity] = useState<
+    | {
+        projectId: string;
+        activityTitle: string;
+      }
+    | null
+  >(null);
 
   const parseBudgetNumber = (rawValue: string): number => {
     const cleaned = rawValue.replace(/[^0-9.,-]/g, '').replace(/,/g, '');
@@ -1076,6 +1093,7 @@ export default function ProjectLeaderProjectsPage() {
 
     if (trainingSnapshot && Array.isArray(trainingSnapshot.editableCells)) {
       const cells: string[] = trainingSnapshot.editableCells;
+      let activityIndexCounter = 0;
 
       // For training design, editableCells are stored as pairs per row:
       // [topicRow0, resourceRow0, topicRow1, resourceRow1, ... , footerResourceCell]
@@ -1089,10 +1107,22 @@ export default function ProjectLeaderProjectsPage() {
         }
 
         parsed.push({
+          activityId: activityIndexCounter,
           title,
           resourcePerson: resourcePerson || undefined,
         });
+
+        activityIndexCounter += 1;
       }
+    }
+
+    if (highlightedProjectActivity && highlightedProjectActivity.projectId === project._id) {
+      parsed = [...parsed].sort((a, b) => {
+        const isAHighlighted = a.title === highlightedProjectActivity.activityTitle;
+        const isBHighlighted = b.title === highlightedProjectActivity.activityTitle;
+        if (isAHighlighted === isBHighlighted) return 0;
+        return isAHighlighted ? -1 : 1;
+      });
     }
 
     setActivitiesForModal(parsed);
@@ -1102,48 +1132,132 @@ export default function ProjectLeaderProjectsPage() {
 
   const openAttendanceView = (activity: ProjectActivity) => {
     setAttendanceActivity(activity);
+    setAttendanceRows([]);
+    setAttendanceError(null);
     setAttendanceViewOpen(true);
   };
 
-  useEffect(() => {
-    const fetchProjects = async () => {
-      setProjectsLoading(true);
-      setProjectsError(null);
-      try {
-        const stored = window.localStorage.getItem('unihub-auth');
-        if (!stored) {
-          setProjectsLoading(false);
-          return;
-        }
+  const handleAttendanceUpdate = async (email: string, status: 'present' | 'absent') => {
+    if (!activitiesModalProject || !attendanceActivity) {
+      return;
+    }
 
-        let projectLeaderId: string | null = null;
-        try {
-          const parsed = JSON.parse(stored) as { id?: string } | null;
-          projectLeaderId = parsed?.id ?? null;
-        } catch {
-          projectLeaderId = null;
-        }
+    setAttendanceUpdatingEmail(email);
+    setAttendanceError(null);
 
-        const url = projectLeaderId
-          ? `http://localhost:5000/api/projects?projectLeaderId=${encodeURIComponent(projectLeaderId)}`
-          : 'http://localhost:5000/api/projects';
+    try {
+      const res = await fetch(
+        `http://localhost:5000/api/projects/${activitiesModalProject._id}/activities/${attendanceActivity.activityId}/registrations`,
+        {
+          method: 'PATCH',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ email, status }),
+        },
+      );
 
-        const res = await fetch(url);
-        if (!res.ok) {
-          const data = await res.json().catch(() => ({}));
-          throw new Error(data.message || 'Failed to load projects');
-        }
-
-        const data = (await res.json()) as LeaderProject[];
-        setProjects(data);
-      } catch (error: any) {
-        setProjectsError(error.message || 'Failed to load projects');
-      } finally {
-        setProjectsLoading(false);
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.message || 'Failed to update attendance');
       }
-    };
 
+      const updated = (await res.json()) as {
+        participantEmail: string;
+        status: 'registered' | 'present' | 'absent';
+        updatedAt?: string;
+      };
+
+      setAttendanceRows((prev) =>
+        prev.map((row) =>
+          row.participantEmail === updated.participantEmail
+            ? { ...row, status: updated.status, updatedAt: updated.updatedAt }
+            : row,
+        ),
+      );
+    } catch (err: any) {
+      setAttendanceError(err.message || 'Failed to update activity attendance');
+    } finally {
+      setAttendanceUpdatingEmail(null);
+    }
+  };
+
+  const fetchProjects = async () => {
+    setProjectsLoading(true);
+    setProjectsError(null);
+    try {
+      const stored = window.localStorage.getItem('unihub-auth');
+      if (!stored) {
+        setProjectsLoading(false);
+        return;
+      }
+
+      let projectLeaderId: string | null = null;
+      try {
+        const parsed = JSON.parse(stored) as { id?: string } | null;
+        projectLeaderId = parsed?.id ?? null;
+      } catch {
+        projectLeaderId = null;
+      }
+
+      const url = projectLeaderId
+        ? `http://localhost:5000/api/projects?projectLeaderId=${encodeURIComponent(projectLeaderId)}`
+        : 'http://localhost:5000/api/projects';
+
+      const res = await fetch(url);
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.message || 'Failed to load projects');
+      }
+
+      const data = (await res.json()) as LeaderProject[];
+      setProjects(data);
+    } catch (error: any) {
+      setProjectsError(error.message || 'Failed to load projects');
+    } finally {
+      setProjectsLoading(false);
+    }
+  };
+
+  useEffect(() => {
     fetchProjects();
+  }, []);
+
+  useEffect(() => {
+    const socket = io('http://localhost:5000');
+    socketRef.current = socket;
+
+    socket.on('notification:new', (payload: any) => {
+      if (!payload || typeof payload.title !== 'string') {
+        return;
+      }
+
+      if (payload.title === 'Project approved') {
+        fetchProjects();
+      }
+
+      if (payload.title === 'Activity join') {
+        const message: string | undefined = (payload as any).message;
+        const projectId: string | undefined = (payload as any).projectId;
+
+        if (message && projectId) {
+          let activityTitle = '';
+          const titleMatch = message.match(/joined activity\s+"(.+?)"/);
+          if (titleMatch && titleMatch[1]) {
+            activityTitle = titleMatch[1].trim();
+          }
+
+          if (activityTitle) {
+            setHighlightedProjectActivity({ projectId, activityTitle });
+          }
+        }
+      }
+    });
+
+    return () => {
+      socket.disconnect();
+      socketRef.current = null;
+    };
   }, []);
 
   useEffect(() => {
@@ -1178,6 +1292,40 @@ export default function ProjectLeaderProjectsPage() {
       cancelled = true;
     };
   }, [viewProjectId, panelVisible]);
+
+  useEffect(() => {
+    if (!attendanceViewOpen || !attendanceActivity || !activitiesModalProject) {
+      return;
+    }
+
+    const fetchRegistrations = async () => {
+      setAttendanceLoading(true);
+      setAttendanceError(null);
+      try {
+        const res = await fetch(
+          `http://localhost:5000/api/projects/${activitiesModalProject._id}/activities/${attendanceActivity.activityId}/registrations`,
+        );
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          throw new Error(data.message || 'Failed to load activity registrations');
+        }
+
+        const data = (await res.json()) as Array<{
+          participantEmail: string;
+          status: 'registered' | 'present' | 'absent';
+          updatedAt?: string;
+        }>;
+
+        setAttendanceRows(data);
+      } catch (err: any) {
+        setAttendanceError(err.message || 'Failed to load activity registrations');
+      } finally {
+        setAttendanceLoading(false);
+      }
+    };
+
+    fetchRegistrations();
+  }, [attendanceViewOpen, attendanceActivity, activitiesModalProject]);
 
   useEffect(() => {
     if (!panelVisible || !panelRef.current || !viewProjectData) {
@@ -1860,27 +2008,36 @@ export default function ProjectLeaderProjectsPage() {
                 </p>
               ) : (
                 <div className="space-y-3">
-                  {activitiesForModal.map((activity, index) => (
-                    <div
-                      key={`${activity.title}-${index}`}
-                      onClick={() => openAttendanceView(activity)}
-                      className="cursor-pointer rounded-xl border border-yellow-100 bg-yellow-50/40 px-3 py-2 text-left transition hover:-translate-y-0.5 hover:shadow-md"
-                    >
-                      <p className="text-sm font-semibold text-gray-900">{activity.title}</p>
-                      <div className="mt-1 flex flex-wrap gap-3 text-[11px] text-gray-700">
-                        {activity.hours && (
-                          <span className="rounded-full bg-white px-2 py-0.5 font-medium text-yellow-700">
-                            {activity.hours} hrs
-                          </span>
-                        )}
-                        {activity.resourcePerson && (
-                          <span className="rounded-full bg-white px-2 py-0.5 font-medium text-gray-700">
-                            Resource: {activity.resourcePerson}
-                          </span>
-                        )}
+                  {activitiesForModal.map((activity, index) => {
+                    const isHighlighted =
+                      !!highlightedProjectActivity &&
+                      activitiesModalProject._id === highlightedProjectActivity.projectId &&
+                      activity.title === highlightedProjectActivity.activityTitle;
+
+                    return (
+                      <div
+                        key={`${activity.title}-${index}`}
+                        onClick={() => openAttendanceView(activity)}
+                        className={`cursor-pointer rounded-xl border border-yellow-100 bg-yellow-50/40 px-3 py-2 text-left transition hover:-translate-y-0.5 hover:shadow-md ${
+                          isHighlighted ? 'ring-2 ring-yellow-400 animate-pulse' : ''
+                        }`}
+                      >
+                        <p className="text-sm font-semibold text-gray-900">{activity.title}</p>
+                        <div className="mt-1 flex flex-wrap gap-3 text-[11px] text-gray-700">
+                          {activity.hours && (
+                            <span className="rounded-full bg-white px-2 py-0.5 font-medium text-yellow-700">
+                              {activity.hours} hrs
+                            </span>
+                          )}
+                          {activity.resourcePerson && (
+                            <span className="rounded-full bg-white px-2 py-0.5 font-medium text-gray-700">
+                              Resource: {activity.resourcePerson}
+                            </span>
+                          )}
+                        </div>
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </div>
@@ -1930,34 +2087,74 @@ export default function ProjectLeaderProjectsPage() {
                 </div>
               </div>
 
-              <div className="space-y-2">
+              <div className="space-y-3">
                 <div className="flex items-center justify-between gap-2">
                   <h3 className="text-sm font-semibold text-gray-900">Participants</h3>
                   <span className="text-[11px] text-gray-500">
-                    Attendance tracking will appear here once participants can join this activity.
+                    Manage attendance for participants who joined this activity.
                   </span>
                 </div>
 
-                <div className="overflow-x-auto rounded-xl border border-yellow-100 bg-yellow-50/40">
-                  <table className="min-w-full text-left text-xs text-gray-800">
-                    <thead className="bg-yellow-50 text-[11px] font-semibold uppercase tracking-wide text-gray-600">
-                      <tr>
-                        <th className="px-3 py-2">Name</th>
-                        <th className="px-3 py-2">Email</th>
-                        <th className="px-3 py-2">Status</th>
-                        <th className="px-3 py-2 text-center">Present</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      <tr>
-                        <td className="px-3 py-3 text-gray-500" colSpan={4}>
-                          No participants are linked to this activity yet. Once you have a registration and
-                          beneficiary flow, they can be listed here with checkboxes for attendance per session.
-                        </td>
-                      </tr>
-                    </tbody>
-                  </table>
-                </div>
+                {attendanceLoading ? (
+                  <p className="text-xs text-gray-600">Loading registrations...</p>
+                ) : attendanceError ? (
+                  <p className="text-xs text-red-600">{attendanceError}</p>
+                ) : attendanceRows.length === 0 ? (
+                  <p className="text-xs text-gray-600">No participants have joined this activity yet.</p>
+                ) : (
+                  <div className="overflow-x-auto rounded-xl border border-yellow-100 bg-yellow-50/40">
+                    <table className="min-w-full text-left text-xs text-gray-800">
+                      <thead className="bg-yellow-50 text-[11px] font-semibold uppercase tracking-wide text-gray-600">
+                        <tr>
+                          <th className="px-3 py-2">Participant email</th>
+                          <th className="px-3 py-2">Status</th>
+                          <th className="px-3 py-2">Actions</th>
+                          <th className="px-3 py-2">Last updated</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {attendanceRows.map((row) => (
+                          <tr key={row.participantEmail} className="border-t border-yellow-100">
+                            <td className="px-3 py-2 text-xs font-medium text-gray-900">{row.participantEmail}</td>
+                            <td className="px-3 py-2 text-xs text-gray-700 capitalize">{row.status}</td>
+                            <td className="px-3 py-2 text-xs">
+                              <div className="flex flex-wrap items-center gap-1">
+                                <button
+                                  type="button"
+                                  disabled={
+                                    attendanceUpdatingEmail === row.participantEmail || row.status !== 'registered'
+                                  }
+                                  onClick={() => handleAttendanceUpdate(row.participantEmail, 'present')}
+                                  className="rounded-full bg-emerald-500 px-2 py-0.5 text-[10px] font-semibold text-white shadow-sm hover:bg-emerald-600 disabled:cursor-not-allowed disabled:opacity-60"
+                                >
+                                  Mark present
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={
+                                    attendanceUpdatingEmail === row.participantEmail || row.status !== 'registered'
+                                  }
+                                  onClick={() => handleAttendanceUpdate(row.participantEmail, 'absent')}
+                                  className="rounded-full border border-red-200 px-2 py-0.5 text-[10px] font-semibold text-red-600 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-60"
+                                >
+                                  Mark absent
+                                </button>
+                              </div>
+                            </td>
+                            <td className="px-3 py-2 text-[10px] text-gray-500">
+                              {row.updatedAt
+                                ? new Date(row.updatedAt).toLocaleString('en-PH', {
+                                    dateStyle: 'medium',
+                                    timeStyle: 'short',
+                                  })
+                                : ''}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
               </div>
             </div>
           </div>

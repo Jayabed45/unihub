@@ -15,6 +15,7 @@ interface User {
   id: string;
   role: string;
   token: string;
+  email?: string;
 }
 
 export default function HomePage() {
@@ -139,7 +140,12 @@ export default function HomePage() {
       console.log('Login successful:', data);
       // NOTE: The backend currently returns a role name. 
       // In a real app, you might get a role ID and fetch details.
-      const authenticatedUser = { id: data.user.id, role: data.user.role, token: data.token } as User;
+      const authenticatedUser = {
+        id: data.user.id,
+        role: data.user.role,
+        token: data.token,
+        email: data.user.email,
+      } as User;
       setProgress(100);
       setUser(authenticatedUser);
       localStorage.setItem(STORAGE_KEY, JSON.stringify(authenticatedUser));

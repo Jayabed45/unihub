@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { usePathname } from 'next/navigation';
-import { Clock, Search, UserCircle2 } from 'lucide-react';
+import { Bell, Clock, Search, UserCircle2 } from 'lucide-react';
 
 import { participantNavigation } from '../navigation';
 
@@ -20,7 +20,17 @@ const dateFormatter = new Intl.DateTimeFormat('en-US', {
   year: 'numeric',
 });
 
-export default function HeaderBar() {
+interface HeaderBarProps {
+  onToggleNotifications?: () => void;
+  notificationsCount?: number;
+  notificationsOpen?: boolean;
+}
+
+export default function HeaderBar({
+  onToggleNotifications,
+  notificationsCount = 0,
+  notificationsOpen,
+}: HeaderBarProps) {
   const pathname = usePathname();
   const [now, setNow] = useState(() => new Date());
 
@@ -72,6 +82,21 @@ export default function HeaderBar() {
               </div>
               <span className="text-xs text-gray-500">{dateLabel}</span>
             </div>
+            <button
+              type="button"
+              onClick={onToggleNotifications}
+              className={`relative flex h-10 w-10 items-center justify-center rounded-full border border-yellow-100 bg-white text-yellow-500 transition hover:-translate-y-0.5 hover:border-yellow-200 hover:shadow ${
+                notificationsOpen ? 'ring-2 ring-yellow-300' : ''
+              }`}
+              aria-label="Notifications"
+            >
+              <Bell className="h-4 w-4" />
+              {notificationsCount > 0 && (
+                <span className="absolute -top-1 -right-1 inline-flex h-4 min-w-[1rem] items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-semibold text-white">
+                  {notificationsCount}
+                </span>
+              )}
+            </button>
             <button
               type="button"
               className="flex h-10 w-10 items-center justify-center rounded-full border border-yellow-100 bg-white text-yellow-500 transition hover:-translate-y-0.5 hover:border-yellow-200 hover:shadow"
