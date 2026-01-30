@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { io, type Socket } from 'socket.io-client';
 
 interface ParticipantProject {
@@ -11,10 +11,122 @@ interface ParticipantProject {
 }
 
 interface ProjectActivity {
+  activityId: number;
   title: string;
   hours?: string;
   resourcePerson?: string;
+  startAt?: string | null;
+  endAt?: string | null;
 }
+
+type EvaluationRating = 1 | 2 | 3 | 4;
+
+interface EvaluationItem {
+  id: string;
+  label: string;
+}
+
+interface EvaluationSection {
+  id: string;
+  title: string;
+  items: EvaluationItem[];
+}
+
+const evaluationSections: EvaluationSection[] = [
+  {
+    id: 'A',
+    title: 'Attainment of Objectives (Pag-abot sa tumong)',
+    items: [
+      {
+        id: 'A1',
+        label:
+          'The objectives of the training/workshop were clearly stated and shared before the start of the activity.',
+      },
+      {
+        id: 'A2',
+        label: 'The objectives of the training/workshop were fully attained at the end of the activity.',
+      },
+      {
+        id: 'A3',
+        label: 'The activity addressed the needs and concerns of the program/beneficiaries.',
+      },
+    ],
+  },
+  {
+    id: 'B',
+    title: 'Content (Unod sa nilalaman)',
+    items: [
+      {
+        id: 'B1',
+        label: 'The content of the training/workshop was relevant to the topic and to the participants.',
+      },
+      {
+        id: 'B2',
+        label: 'The content was organized and easy to understand.',
+      },
+      {
+        id: 'B3',
+        label: 'The examples and activities helped me understand the topic better.',
+      },
+    ],
+  },
+  {
+    id: 'C',
+    title: 'Resource Person / Facilitator (Magwawali / Tigpatuman)',
+    items: [
+      {
+        id: 'C1',
+        label: 'The resource person/facilitator was knowledgeable about the topic discussed.',
+      },
+      {
+        id: 'C2',
+        label: 'The resource person/facilitator explained the topic clearly.',
+      },
+      {
+        id: 'C3',
+        label: 'The resource person/facilitator encouraged participation and answered questions well.',
+      },
+    ],
+  },
+  {
+    id: 'D',
+    title: 'Methods / Strategies Used (Pamaagi sa pagtudlo)',
+    items: [
+      {
+        id: 'D1',
+        label: 'The methods/strategies used made the session interesting and engaging.',
+      },
+      {
+        id: 'D2',
+        label: 'The activities allowed me to apply what I have learned.',
+      },
+    ],
+  },
+  {
+    id: 'E',
+    title: 'Logistics and Support (Mga kahikayan sa kalihukan)',
+    items: [
+      {
+        id: 'E1',
+        label: 'The venue, schedule, and materials provided were appropriate and adequate.',
+      },
+      {
+        id: 'E2',
+        label: 'Overall coordination and facilitation of the activity were efficient and well-organized.',
+      },
+    ],
+  },
+  {
+    id: 'F',
+    title: 'Overall Evaluation (Kinatas-ang pagsusi sa tibuok kalihukan)',
+    items: [
+      {
+        id: 'F1',
+        label: 'Overall, I am satisfied with this extension project/program activity.',
+      },
+    ],
+  },
+];
 
 export default function ParticipantFeedsPage() {
   const [projects, setProjects] = useState<ParticipantProject[]>([]);
@@ -36,6 +148,179 @@ export default function ParticipantFeedsPage() {
   const [activityJoinLoading, setActivityJoinLoading] = useState(false);
   const [activityJoinError, setActivityJoinError] = useState<string | null>(null);
   const [activityJoinStatusByKey, setActivityJoinStatusByKey] = useState<Record<string, 'joined'>>({});
+  const [joinedActivitiesMeta, setJoinedActivitiesMeta] = useState<
+    Record<
+      string,
+      {
+        projectId: string;
+        projectName: string;
+        activityId: number;
+        activityTitle: string;
+        startAt?: string | null;
+        endAt?: string | null;
+      }
+    >
+  >({});
+  const [surveyModalOpen, setSurveyModalOpen] = useState(false);
+  const [surveyProjectName, setSurveyProjectName] = useState('');
+  const [surveyActivityTitle, setSurveyActivityTitle] = useState('');
+  const [surveyDateLabel, setSurveyDateLabel] = useState('');
+  const [surveyCollegeDept, setSurveyCollegeDept] = useState('');
+  const [surveyRatings, setSurveyRatings] = useState<Record<string, EvaluationRating | null>>({});
+  const [surveyComments, setSurveyComments] = useState('');
+  const [surveySuggestions, setSurveySuggestions] = useState('');
+  const [surveyProjectId, setSurveyProjectId] = useState<string | null>(null);
+  const [surveyActivityId, setSurveyActivityId] = useState<number | null>(null);
+  const [surveySubmitting, setSurveySubmitting] = useState(false);
+  const [surveyError, setSurveyError] = useState<string | null>(null);
+  const [surveySubmittedMessage, setSurveySubmittedMessage] = useState<string | null>(null);
+
+  const createReminderNotification = async (title: string, message: string, projectId?: string) => {
+    try {
+      const res = await fetch('http://localhost:5000/api/notifications', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          title,
+          message,
+          project: projectId,
+          recipientEmail: participantEmail || undefined,
+        }),
+      });
+
+      if (!res.ok) {
+        // Best-effort only; reminders still show as popups even if notification write fails
+        console.error('Failed to persist reminder notification');
+      }
+    } catch (error) {
+      console.error('Failed to create reminder notification', error);
+    }
+  };
+
+  const openSurveyForMeta = (meta: {
+    projectId: string;
+    projectName: string;
+    activityId: number;
+    activityTitle: string;
+    endAt?: string | null;
+  }) => {
+    const endMs = meta.endAt ? new Date(meta.endAt).getTime() : NaN;
+    const dateLabel = Number.isFinite(endMs)
+      ? new Date(endMs).toLocaleDateString('en-PH', {
+          dateStyle: 'medium',
+        })
+      : '';
+
+    setSurveyProjectId(meta.projectId);
+    setSurveyActivityId(meta.activityId);
+    setSurveyProjectName(meta.projectName);
+    setSurveyActivityTitle(meta.activityTitle);
+    setSurveyDateLabel(dateLabel);
+    setSurveyCollegeDept('');
+    setSurveyRatings({});
+    setSurveyComments('');
+    setSurveySuggestions('');
+    setSurveyError(null);
+    setSurveySubmittedMessage(null); // Reset message on open
+    setSurveyModalOpen(true);
+
+    if (!participantEmail) {
+      return;
+    }
+
+    const emailForFetch = participantEmail;
+
+    fetch(
+      `http://localhost:5000/api/projects/${encodeURIComponent(
+        meta.projectId,
+      )}/activities/${meta.activityId}/evaluations?email=${encodeURIComponent(emailForFetch)}`,
+    )
+      .then((res) => {
+        if (!res.ok) {
+          return null;
+        }
+        return res.json();
+      })
+      .then((data) => {
+        if (!data || !Array.isArray(data) || data.length === 0) {
+          // No previous submission, show the form as-is.
+          return;
+        }
+
+        // A submission already exists.
+        setSurveySubmittedMessage('You have already submitted the evaluation for this activity.');
+      })
+      .catch((error) => {
+        console.error('Failed to load existing activity evaluation', error);
+      });
+  };
+
+  const handleSubmitSurvey = async () => {
+    if (!surveyProjectId || surveyActivityId === null || !participantEmail) {
+      setSurveyModalOpen(false);
+      return;
+    }
+
+    const ratingsPayload: Record<string, number> = {};
+    Object.entries(surveyRatings).forEach(([key, value]) => {
+      if (typeof value === 'number') {
+        ratingsPayload[key] = value;
+      }
+    });
+
+    const payload = {
+      email: participantEmail,
+      collegeDept: surveyCollegeDept,
+      ratings: ratingsPayload,
+      comments: surveyComments,
+      suggestions: surveySuggestions,
+    };
+
+    setSurveySubmitting(true);
+    setSurveyError(null);
+
+    try {
+      const res = await fetch(
+        `http://localhost:5000/api/projects/${encodeURIComponent(
+          surveyProjectId,
+        )}/activities/${surveyActivityId}/evaluations`,
+        {
+          method: 'PATCH',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(payload),
+        },
+      );
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setSurveyError(data.message || 'Failed to submit evaluation. Please try again.');
+        return;
+      }
+
+      setSurveyModalOpen(false);
+    } catch (error) {
+      console.error('Failed to submit activity evaluation', error);
+      setSurveyError('Failed to submit evaluation. Please check your connection and try again.');
+    } finally {
+      setSurveySubmitting(false);
+    }
+  };
+
+  const [activityReminder, setActivityReminder] = useState<
+    | {
+        type: 'prestart' | 'start' | 'end';
+        projectName: string;
+        activityTitle: string;
+        message: string;
+      }
+    | null
+  >(null);
+  const reminderTimeoutsRef = useRef<number[]>([]);
+  const [nowMs, setNowMs] = useState(() => Date.now());
   const socketRef = useRef<Socket | null>(null);
 
   const fetchProjects = async () => {
@@ -55,6 +340,23 @@ export default function ParticipantFeedsPage() {
       setLoading(false);
     }
   };
+
+  const activityDetailIsExpired = useMemo(() => {
+    if (!activityDetailActivity?.endAt) return false;
+    const d = new Date(activityDetailActivity.endAt);
+    if (Number.isNaN(d.getTime())) return false;
+    return d.getTime() < nowMs;
+  }, [activityDetailActivity, nowMs]);
+
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      setNowMs(Date.now());
+    }, 30000);
+
+    return () => {
+      window.clearInterval(id);
+    };
+  }, []);
 
   useEffect(() => {
     fetchProjects();
@@ -124,6 +426,74 @@ export default function ParticipantFeedsPage() {
     fetchPendingFromNotifications();
   }, [participantEmail]);
 
+  const processActivityEvalIntent = () => {
+    if (!participantEmail) return;
+
+    try {
+      const raw = window.localStorage.getItem('unihub-activity-eval-intent');
+      if (!raw) return;
+
+      const parsed = JSON.parse(raw) as
+        | {
+            projectId?: string;
+            projectName?: string;
+            activityTitle?: string;
+            email?: string;
+          }
+        | null;
+
+      if (!parsed) return;
+
+      const allMetas = Object.values(joinedActivitiesMeta);
+
+      let target = null as
+        | {
+            projectId: string;
+            projectName: string;
+            activityId: number;
+            activityTitle: string;
+            startAt?: string | null;
+            endAt?: string | null;
+          }
+        | null;
+
+      if (parsed.projectId && parsed.activityTitle) {
+        target = allMetas.find(
+          (meta) => meta.projectId === parsed.projectId && meta.activityTitle === parsed.activityTitle,
+        ) as any;
+      }
+
+      if (!target && parsed.projectName && parsed.activityTitle) {
+        target = allMetas.find(
+          (meta) => meta.projectName === parsed.projectName && meta.activityTitle === parsed.activityTitle,
+        ) as any;
+      }
+
+      if (target) {
+        openSurveyForMeta(target);
+        window.localStorage.removeItem('unihub-activity-eval-intent');
+      }
+    } catch (error) {
+      console.error('Failed to process activity evaluation intent from storage', error);
+    }
+  };
+
+  useEffect(() => {
+    processActivityEvalIntent();
+  }, [joinedActivitiesMeta, participantEmail]);
+
+  useEffect(() => {
+    const handler = () => {
+      processActivityEvalIntent();
+    };
+
+    window.addEventListener('unihub-activity-eval-intent', handler);
+
+    return () => {
+      window.removeEventListener('unihub-activity-eval-intent', handler);
+    };
+  }, [joinedActivitiesMeta, participantEmail]);
+
   const fetchJoinedActivities = async () => {
     if (!participantEmail) return;
 
@@ -137,17 +507,42 @@ export default function ParticipantFeedsPage() {
 
       const data = (await res.json()) as Array<{
         projectId: string;
+        projectName: string;
         activityId: number;
+        activityTitle: string;
+        startAt?: string | null;
+        endAt?: string | null;
       }>;
 
       const joinedMap: Record<string, 'joined'> = {};
+      const metaMap: Record<
+        string,
+        {
+          projectId: string;
+          projectName: string;
+          activityId: number;
+          activityTitle: string;
+          startAt?: string | null;
+          endAt?: string | null;
+        }
+      > = {};
+
       data.forEach((item) => {
         const key = `${item.projectId}:${item.activityId}`;
         joinedMap[key] = 'joined';
+        metaMap[key] = {
+          projectId: item.projectId,
+          projectName: item.projectName,
+          activityId: item.activityId,
+          activityTitle: item.activityTitle,
+          startAt: item.startAt,
+          endAt: item.endAt,
+        };
       });
 
       if (Object.keys(joinedMap).length > 0) {
         setActivityJoinStatusByKey((prev) => ({ ...prev, ...joinedMap }));
+        setJoinedActivitiesMeta((prev) => ({ ...prev, ...metaMap }));
       }
     } catch (err) {
       console.error('Failed to load joined activities for participant', err);
@@ -158,6 +553,130 @@ export default function ParticipantFeedsPage() {
     if (!participantEmail) return;
     fetchJoinedActivities();
   }, [participantEmail]);
+
+  useEffect(() => {
+    // Clear previous timers
+    reminderTimeoutsRef.current.forEach((id) => {
+      window.clearTimeout(id);
+    });
+    reminderTimeoutsRef.current = [];
+
+    const now = Date.now();
+
+    Object.values(joinedActivitiesMeta).forEach((meta) => {
+      const { projectName, activityTitle, startAt, endAt } = meta;
+
+      const startMs = startAt ? new Date(startAt).getTime() : NaN;
+      const endMs = endAt ? new Date(endAt).getTime() : NaN;
+
+      const hasStart = Number.isFinite(startMs);
+      const hasEnd = Number.isFinite(endMs);
+
+      if (hasStart && startMs > now) {
+        const thirtyMinutesBefore = startMs - 30 * 60 * 1000;
+        const tenMinutesBefore = startMs - 10 * 60 * 1000;
+
+        const events: Array<{ at: number; type: 'prestart' | 'start'; message: string }> = [
+          {
+            at: thirtyMinutesBefore,
+            type: 'prestart',
+            message: 'This activity will start in about 30 minutes.',
+          },
+          {
+            at: tenMinutesBefore,
+            type: 'prestart',
+            message: 'This activity will start in about 10 minutes.',
+          },
+          {
+            at: startMs,
+            type: 'start',
+            message: 'This activity is starting now.',
+          },
+        ];
+
+        events.forEach((event) => {
+          if (event.at <= now) return;
+          const timeoutId = window.setTimeout(() => {
+            const reminder = {
+              type: event.type as 'prestart' | 'start',
+              projectName,
+              activityTitle,
+              message: event.message,
+            };
+            setActivityReminder(reminder);
+            // Create a notification for this reminder
+            createReminderNotification(
+              `Activity ${event.type === 'start' ? 'Started' : 'Starting Soon'}`,
+              `[${projectName}] ${activityTitle}: ${event.message}`,
+              meta.projectId
+            );
+          }, event.at - now);
+          reminderTimeoutsRef.current.push(timeoutId);
+        });
+      }
+
+      if (hasEnd && endMs > now) {
+        const tenMinutesBeforeEnd = endMs - 10 * 60 * 1000;
+
+        if (tenMinutesBeforeEnd > now) {
+          const preEndTimeoutId = window.setTimeout(() => {
+            const reminder = {
+              type: 'end' as const,
+              projectName,
+              activityTitle,
+              message: 'This activity will end in about 10 minutes.',
+            };
+            setActivityReminder(reminder);
+            // Create a notification for this reminder
+            createReminderNotification(
+              'Activity Ending Soon',
+              `[${projectName}] ${activityTitle}: This activity will end in about 10 minutes.`,
+              meta.projectId
+            );
+          }, tenMinutesBeforeEnd - now);
+          reminderTimeoutsRef.current.push(preEndTimeoutId);
+        }
+
+        const timeoutId = window.setTimeout(() => {
+          const reminder = {
+            type: 'end' as const,
+            projectName,
+            activityTitle,
+            message: 'This activity has ended.',
+          };
+          setActivityReminder(reminder);
+
+          openSurveyForMeta({
+            projectId: meta.projectId,
+            projectName,
+            activityId: meta.activityId,
+            activityTitle,
+            endAt,
+          });
+
+          // Create notifications for this reminder and the evaluation prompt
+          createReminderNotification(
+            'Activity Ended',
+            `[${projectName}] ${activityTitle}: This activity has ended.`,
+            meta.projectId,
+          );
+          createReminderNotification(
+            'Activity Evaluation',
+            `[${projectName}] ${activityTitle}: Please complete the evaluation form for this activity.`,
+            meta.projectId,
+          );
+        }, endMs - now);
+        reminderTimeoutsRef.current.push(timeoutId);
+      }
+    });
+
+    return () => {
+      reminderTimeoutsRef.current.forEach((id) => {
+        window.clearTimeout(id);
+      });
+      reminderTimeoutsRef.current = [];
+    };
+  }, [joinedActivitiesMeta, participantEmail]);
 
   useEffect(() => {
     const socket = io('http://localhost:5000');
@@ -225,16 +744,36 @@ export default function ParticipantFeedsPage() {
 
       let parsed: ProjectActivity[] = [];
 
+      const schedule: Array<{ activityId: number; startAt?: string; endAt?: string }> = Array.isArray(
+        (data as any)?.activitySchedule,
+      )
+        ? (((data as any).activitySchedule as any[]) || []).map((item) => ({
+            activityId: Number((item as any).activityId),
+            startAt: (item as any).startAt as string | undefined,
+            endAt: (item as any).endAt as string | undefined,
+          }))
+        : [];
+
       if (trainingSnapshot && Array.isArray(trainingSnapshot.editableCells)) {
         const cells: string[] = trainingSnapshot.editableCells;
+        let activityIndexCounter = 0;
+
         for (let i = 0; i + 1 < cells.length; i += 2) {
           const title = (cells[i] || '').trim();
           const resourcePerson = (cells[i + 1] || '').trim();
           if (!title) continue;
+
+          const scheduleEntry = schedule.find((item) => item.activityId === activityIndexCounter);
+
           parsed.push({
+            activityId: activityIndexCounter,
             title,
             resourcePerson: resourcePerson || undefined,
+            startAt: scheduleEntry?.startAt ?? null,
+            endAt: scheduleEntry?.endAt ?? null,
           });
+
+          activityIndexCounter += 1;
         }
       }
 
@@ -260,10 +799,246 @@ export default function ParticipantFeedsPage() {
           <p className="text-gray-500">Loading projects…</p>
         </div>
       )}
-      {activitiesModalOpen && activitiesModalProject && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4" role="dialog" aria-modal="true">
-          <div className="w-full max-w-lg rounded-2xl border border-yellow-100 bg-white p-6 text-sm text-gray-800 shadow-xl">
+      {surveyModalOpen && (
+        <div
+          className="fixed inset-0 z-70 flex h-screen items-center justify-center bg-black/50 px-4"
+          role="dialog"
+          aria-modal="true"
+        >
+          <div className="w-full max-w-3xl max-h-[90vh] overflow-y-auto rounded-2xl border border-yellow-100 bg-white p-6 text-sm text-gray-800 shadow-2xl">
             <div className="mb-4 flex items-start justify-between gap-3">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wide text-yellow-500">
+                  Extension Project / Program Evaluation
+                </p>
+                <h3 className="mt-1 text-base font-semibold text-gray-900 line-clamp-2">{surveyActivityTitle}</h3>
+                <p className="mt-0.5 text-[11px] text-gray-600 line-clamp-1">Project: {surveyProjectName}</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSurveyModalOpen(false)}
+                className="rounded-full border border-yellow-200 px-3 py-1 text-xs font-semibold text-yellow-700 hover:bg-yellow-50"
+              >
+                Close
+              </button>
+            </div>
+
+            {surveySubmittedMessage ? (
+              <div className="py-8 text-center">
+                <p className="text-base text-gray-700">{surveySubmittedMessage}</p>
+              </div>
+            ) : (
+              <>
+                <div className="space-y-3 text-xs">
+                  <div className="grid gap-3 sm:grid-cols-2">
+                <div className="space-y-1">
+                  <p className="font-medium text-gray-800">Name of the Project / Program:</p>
+                  <p className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-1.5 text-[11px] text-gray-800">
+                    {surveyProjectName || '—'}
+                  </p>
+                </div>
+                <div className="space-y-1">
+                  <p className="font-medium text-gray-800">Name of the Activity:</p>
+                  <p className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-1.5 text-[11px] text-gray-800">
+                    {surveyActivityTitle || '—'}
+                  </p>
+                </div>
+                <div className="space-y-1">
+                  <label className="font-medium text-gray-800" htmlFor="survey-college">
+                    College / Department:
+                  </label>
+                  <input
+                    id="survey-college"
+                    type="text"
+                    value={surveyCollegeDept}
+                    onChange={(e) => setSurveyCollegeDept(e.target.value)}
+                    className="w-full rounded-lg border border-gray-200 px-3 py-1.5 text-[11px] text-gray-800 focus:border-yellow-400 focus:outline-none focus:ring-2 focus:ring-yellow-200"
+                    placeholder="e.g. College of Teacher Education"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <p className="font-medium text-gray-800">Date:</p>
+                  <p className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-1.5 text-[11px] text-gray-800">
+                    {surveyDateLabel || '—'}
+                  </p>
+                </div>
+              </div>
+
+              <div className="mt-3 space-y-1">
+                <p className="text-[11px] text-gray-700">
+                  Please check the column that corresponds to your rating.
+                </p>
+                <p className="text-[11px] font-medium text-gray-800">Rating guide:</p>
+                <p className="text-[11px] text-gray-700">
+                  <span className="font-semibold">4 – Very Good</span> &nbsp;|&nbsp;
+                  <span className="font-semibold">3 – Good</span> &nbsp;|&nbsp;
+                  <span className="font-semibold">2 – Fair</span> &nbsp;|&nbsp;
+                  <span className="font-semibold">1 – Poor</span>
+                </p>
+              </div>
+
+              <div className="mt-3 overflow-x-auto rounded-xl border border-yellow-100 bg-yellow-50/40">
+                <table className="min-w-full border-collapse text-[11px]">
+                  <thead>
+                    <tr className="bg-yellow-100/80 text-gray-800">
+                      <th className="border border-yellow-200 px-3 py-2 text-left font-semibold">Criteria of Evaluation</th>
+                      <th className="w-12 border border-yellow-200 px-2 py-2 text-center font-semibold">4</th>
+                      <th className="w-12 border border-yellow-200 px-2 py-2 text-center font-semibold">3</th>
+                      <th className="w-12 border border-yellow-200 px-2 py-2 text-center font-semibold">2</th>
+                      <th className="w-12 border border-yellow-200 px-2 py-2 text-center font-semibold">1</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {evaluationSections.map((section) => (
+                      <Fragment key={section.id}>
+                        <tr className="bg-yellow-50/80">
+                          <td
+                            className="border border-yellow-200 px-3 py-2 text-left font-semibold text-gray-900"
+                            colSpan={5}
+                          >
+                            {section.id}. {section.title}
+                          </td>
+                        </tr>
+                        {section.items.map((item) => {
+                          const current = surveyRatings[item.id] ?? null;
+                          return (
+                            <tr key={item.id} className="bg-white/80">
+                              <td className="border border-yellow-200 px-3 py-2 align-top text-gray-800">
+                                <span className="mr-1 font-semibold">{item.id.replace(/^[A-Z]/, section.id + '.')}</span>
+                                {item.label}
+                              </td>
+                              {[4, 3, 2, 1].map((val) => (
+                                <td
+                                  key={val}
+                                  className="border border-yellow-200 px-2 py-2 text-center align-middle"
+                                >
+                                  <input
+                                    type="radio"
+                                    name={item.id}
+                                    value={val}
+                                    checked={current === val}
+                                    onChange={() =>
+                                      setSurveyRatings((prev) => ({
+                                        ...prev,
+                                        [item.id]: val as EvaluationRating,
+                                      }))
+                                    }
+                                    className="h-3 w-3 text-yellow-500 focus:ring-yellow-400"
+                                  />
+                                </td>
+                              ))}
+                            </tr>
+                          );
+                        })}
+                      </Fragment>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                <div className="space-y-1">
+                  <label htmlFor="survey-comments" className="text-[11px] font-medium text-gray-800">
+                    Comments / Observations:
+                  </label>
+                  <textarea
+                    id="survey-comments"
+                    rows={3}
+                    value={surveyComments}
+                    onChange={(e) => setSurveyComments(e.target.value)}
+                    className="w-full rounded-lg border border-gray-200 px-3 py-1.5 text-[11px] text-gray-800 focus:border-yellow-400 focus:outline-none focus:ring-2 focus:ring-yellow-200"
+                    placeholder="Write any comments or observations about the activity."
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label htmlFor="survey-suggestions" className="text-[11px] font-medium text-gray-800">
+                    Suggestions / Recommendations:
+                  </label>
+                  <textarea
+                    id="survey-suggestions"
+                    rows={3}
+                    value={surveySuggestions}
+                    onChange={(e) => setSurveySuggestions(e.target.value)}
+                    className="w-full rounded-lg border border-gray-200 px-3 py-1.5 text-[11px] text-gray-800 focus:border-yellow-400 focus:outline-none focus:ring-2 focus:ring-yellow-200"
+                    placeholder="Write your suggestions to improve future activities."
+                  />
+                </div>
+              </div>
+
+              {surveyError && (
+                <p className="mt-2 text-[11px] font-medium text-red-600">{surveyError}</p>
+              )}
+
+              <div className="mt-4 flex items-center justify-end gap-2 text-xs">
+                <button
+                  type="button"
+                  onClick={() => setSurveyModalOpen(false)}
+                  className="rounded-full border border-yellow-200 px-3 py-1 font-semibold text-yellow-700 hover:bg-yellow-50"
+                  disabled={surveySubmitting}
+                >
+                  Not now
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    // For now, just close the modal; responses are kept client-side only
+                    handleSubmitSurvey();
+                  }}
+                  className="rounded-full bg-yellow-500 px-4 py-1.5 font-semibold text-white shadow hover:bg-yellow-600 disabled:opacity-70"
+                >
+                  {surveySubmitting ? 'Submitting…' : 'Submit evaluation'}
+                </button>
+              </div>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  )}
+
+      {activityReminder && (
+        <div
+          className="fixed inset-0 z-70 flex h-screen items-center justify-center bg-black/50 px-4"
+          role="dialog"
+          aria-modal="true"
+        >
+          <div className="w-full max-w-md rounded-2xl border border-yellow-100 bg-white p-6 text-sm text-gray-800 shadow-2xl">
+            <div className="mb-3 flex items-start justify-between gap-3">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wide text-yellow-500">Activity reminder</p>
+                <h3 className="mt-1 text-base font-semibold text-gray-900 line-clamp-2">
+                  {activityReminder.activityTitle}
+                </h3>
+                <p className="mt-0.5 text-[11px] text-gray-600 line-clamp-1">
+                  Project: {activityReminder.projectName}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setActivityReminder(null)}
+                className="rounded-full border border-yellow-200 px-3 py-1 text-xs font-semibold text-yellow-700 hover:bg-yellow-50"
+              >
+                Close
+              </button>
+            </div>
+            <p className="text-xs text-gray-700">{activityReminder.message}</p>
+          </div>
+        </div>
+      )}
+      {activitiesModalOpen && activitiesModalProject && (
+        <div
+          className="fixed inset-0 z-50 flex h-screen items-stretch bg-black/40 backdrop-blur-sm"
+          role="dialog"
+          aria-modal="true"
+        >
+          <div
+            className="ml-auto flex h-screen w-full max-w-md flex-col bg-white text-sm text-gray-800 shadow-2xl"
+            style={{
+              transform: activitiesModalOpen ? 'translateX(0%)' : 'translateX(100%)',
+              transition: 'transform 280ms cubic-bezier(0.22, 0.61, 0.36, 1)',
+            }}
+          >
+            <div className="flex items-start justify-between gap-3 border-b border-yellow-100 px-6 py-4">
               <div>
                 <p className="text-xs font-semibold uppercase tracking-wide text-yellow-500">Competencies / Topics</p>
                 <h3 className="mt-1 text-base font-semibold text-gray-900 line-clamp-2">
@@ -282,54 +1057,114 @@ export default function ParticipantFeedsPage() {
                 Close
               </button>
             </div>
-            {activitiesForModal.length === 0 ? (
-              <p className="text-sm text-gray-600">
-                There are no competencies / topics listed yet for this project.
-              </p>
-            ) : (
-              <ul className="space-y-2 text-sm text-gray-800">
-                {activitiesForModal.map((activity, index) => {
+            <div className="flex-1 overflow-y-auto px-6 py-5">
+              {activitiesForModal.length === 0 ? (
+                <p className="text-sm text-gray-600">
+                  There are no competencies / topics listed yet for this project.
+                </p>
+              ) : (
+                <ul className="space-y-2 text-sm text-gray-800">
+                  {activitiesForModal.map((activity, index) => {
                   const joinedKey =
-                    activitiesModalProject && index !== null
-                      ? `${activitiesModalProject._id}:${index}`
+                    activitiesModalProject && activity.activityId !== null && activity.activityId !== undefined
+                      ? `${activitiesModalProject._id}:${activity.activityId}`
                       : undefined;
                   const isJoined = !!(joinedKey && activityJoinStatusByKey[joinedKey] === 'joined');
 
-                  return (
-                    <li
-                      key={`${activity.title}-${index}`}
-                      onClick={() => {
-                        setActivityDetailActivity(activity);
-                        setActivityDetailIndex(index);
-                        setActivityJoinError(null);
-                        setActivityDetailOpen(true);
-                      }}
-                      className="cursor-pointer rounded-xl border border-yellow-100 bg-yellow-50/60 px-3 py-2 transition hover:-translate-y-0.5 hover:shadow-md"
-                    >
-                      <div className="flex items-start justify-between gap-3">
+                  const hasStart = !!activity.startAt;
+                  const hasEnd = !!activity.endAt;
+
+                  const now = nowMs;
+                  const startDate = activity.startAt ? new Date(activity.startAt) : undefined;
+                  const endDate = activity.endAt ? new Date(activity.endAt) : undefined;
+
+                  const hasValidStart = !!startDate && !Number.isNaN(startDate.getTime());
+                  const hasValidEnd = !!endDate && !Number.isNaN(endDate.getTime());
+
+                  const isExpired = hasValidEnd && endDate!.getTime() < now;
+                  const isOngoing =
+                    hasValidStart && hasValidEnd && startDate!.getTime() <= now && now <= endDate!.getTime();
+                  const isUpcoming = hasValidStart && !isOngoing && !isExpired && startDate!.getTime() > now;
+
+                    return (
+                      <li
+                        key={`${activity.title}-${index}`}
+                        onClick={() => {
+                          setActivityDetailActivity(activity);
+                          setActivityDetailIndex(index);
+                          setActivityJoinError(null);
+                          setActivityDetailOpen(true);
+                        }}
+                        className="cursor-pointer rounded-xl border border-yellow-100 bg-yellow-50/60 px-3 py-2 transition hover:-translate-y-0.5 hover:shadow-md"
+                      >
+                        <div className="flex items-start justify-between gap-3">
                         <div>
                           <p className="text-sm font-semibold text-gray-900">{activity.title}</p>
                           {activity.resourcePerson ? (
-                            <p className="mt-0.5 text-xs text-gray-600">Resource person: {activity.resourcePerson}</p>
+                           <p className="mt-0.5 text-xs text-gray-600">Resource person: {activity.resourcePerson}</p>
                           ) : null}
+                          {(hasStart || hasEnd) && (
+                            <p className="mt-0.5 text-[11px] text-gray-600">
+                              {hasStart && activity.startAt && (
+                                <>
+                                  Start:{' '}
+                                  {new Date(activity.startAt).toLocaleString('en-PH', {
+                                    dateStyle: 'medium',
+                                    timeStyle: 'short',
+                                  })}
+                                </>
+                              )}
+                              {hasEnd && activity.endAt && (
+                                <>
+                                  {hasStart ? ' · ' : ''}
+                                  End:{' '}
+                                  {new Date(activity.endAt).toLocaleString('en-PH', {
+                                    dateStyle: 'medium',
+                                    timeStyle: 'short',
+                                  })}
+                                </>
+                              )}
+                              {isExpired && ' · Ended'}
+                            </p>
+                          )}
                         </div>
                         {isJoined && (
                           <span className="mt-0.5 inline-flex items-center rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-medium text-emerald-700">
                             Joined
                           </span>
                         )}
+                        {isUpcoming && (
+                          <span className="mt-0.5 inline-flex items-center rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-[10px] font-medium text-blue-600">
+                            Upcoming
+                          </span>
+                        )}
+                        {isOngoing && (
+                          <span className="mt-0.5 inline-flex items-center rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-medium text-emerald-600">
+                            Ongoing
+                          </span>
+                        )}
+                        {isExpired && (
+                          <span className="mt-0.5 inline-flex items-center rounded-full border border-red-200 bg-red-50 px-2 py-0.5 text-[10px] font-medium text-red-600">
+                            Ended
+                          </span>
+                        )}
                       </div>
                     </li>
                   );
                 })}
-              </ul>
-            )}
+                </ul>
+              )}
+            </div>
           </div>
         </div>
       )}
 
       {activityDetailOpen && activityDetailActivity && activitiesModalProject && (
-        <div className="fixed inset-0 z-60 flex items-center justify-center bg-black/50 px-4" role="dialog" aria-modal="true">
+        <div
+          className="fixed inset-0 z-60 flex h-screen items-center justify-center bg-black/50 px-4"
+          role="dialog"
+          aria-modal="true"
+        >
           <div className="w-full max-w-md rounded-2xl border border-yellow-100 bg-white p-6 text-sm text-gray-800 shadow-2xl">
             <div className="mb-4 flex items-start justify-between gap-3">
               <div>
@@ -358,6 +1193,43 @@ export default function ParticipantFeedsPage() {
                 </p>
               ) : null}
 
+              {(activityDetailActivity.startAt || activityDetailActivity.endAt) && (
+                <p className="text-[11px] text-gray-600">
+                  {activityDetailActivity.startAt && (
+                    <>
+                      Start:{' '}
+                      {new Date(activityDetailActivity.startAt).toLocaleString('en-PH', {
+                        dateStyle: 'medium',
+                        timeStyle: 'short',
+                      })}
+                    </>
+                  )}
+                  {activityDetailActivity.endAt && (
+                    <>
+                      {activityDetailActivity.startAt ? ' · ' : ''}
+                      End:{' '}
+                      {new Date(activityDetailActivity.endAt).toLocaleString('en-PH', {
+                        dateStyle: 'medium',
+                        timeStyle: 'short',
+                      })}
+                    </>
+                  )}
+                </p>
+              )}
+
+              {!activityDetailActivity.startAt && !activityDetailActivity.endAt && (
+                <p className="text-xs text-gray-600">
+                  This activity does not have a schedule yet. Please wait for the project leader to set the date and
+                  time. You will be notified once it has been scheduled.
+                </p>
+              )}
+
+              {activityDetailIsExpired && (activityDetailActivity.startAt || activityDetailActivity.endAt) && (
+                <p className="text-xs text-red-600">
+                  This activity has already ended. You can no longer join this activity.
+                </p>
+              )}
+
               {activityJoinError && (
                 <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
                   {activityJoinError}
@@ -377,13 +1249,15 @@ export default function ParticipantFeedsPage() {
                 >
                   Not now
                 </button>
-                <button
+                {activityDetailActivity.startAt || activityDetailActivity.endAt ? (
+                  <button
                   type="button"
                   disabled={activityJoinLoading ||
                     !participantEmail ||
                     (activitiesModalProject &&
                       activityDetailIndex !== null &&
-                      activityJoinStatusByKey[`${activitiesModalProject._id}:${activityDetailIndex}`] === 'joined')}
+                      activityJoinStatusByKey[`${activitiesModalProject._id}:${activityDetailIndex}`] === 'joined') ||
+                    activityDetailIsExpired}
                   onClick={async () => {
                     if (!participantEmail) {
                       setActivityJoinError('Your email could not be detected. Please sign out and log in again.');
@@ -432,7 +1306,8 @@ export default function ParticipantFeedsPage() {
                     : activityJoinLoading
                     ? 'Joining…'
                     : 'Join this activity'}
-                </button>
+                  </button>
+                ) : null}
               </div>
             </div>
           </div>

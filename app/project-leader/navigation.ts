@@ -2,9 +2,6 @@ import {
   LayoutGrid,
   FolderKanban,
   Users,
-  CheckCircle,
-  BarChart3,
-  Megaphone,
 } from 'lucide-react';
 
 export const projectLeaderNavigation = [
@@ -25,24 +22,6 @@ export const projectLeaderNavigation = [
     description: 'View beneficiary rosters and manage communications.',
     icon: Users,
     href: '/project-leader/participants',
-  },
-  {
-    name: 'Approval',
-    description: 'Approve or reject new beneficiary registrations.',
-    icon: CheckCircle,
-    href: '/project-leader/approval',
-  },
-  {
-    name: 'Analytics',
-    description: 'Attendance, engagement, and satisfaction analytics.',
-    icon: BarChart3,
-    href: '/project-leader/analytics',
-  },
-  {
-    name: 'Announcements',
-    description: 'Create reminders, email blasts, and announcements.',
-    icon: Megaphone,
-    href: '/project-leader/announcements',
   },
 ] as const;
 

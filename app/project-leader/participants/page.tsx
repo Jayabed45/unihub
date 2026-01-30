@@ -57,6 +57,40 @@ export default function ProjectLeaderParticipantsPage() {
       }
     | null
   >(null);
+  const [leaderProjects, setLeaderProjects] = useState<Array<{ _id: string; name?: string }>>([]);
+  const [selectedEvalProjectId, setSelectedEvalProjectId] = useState<string>('');
+  const [evalSummaries, setEvalSummaries] = useState<
+    Array<{
+      activityId: number;
+      activityTitle: string;
+      totalResponses: number;
+      overallAverage: number;
+      perQuestionAverages: Record<string, number>;
+    }>
+  >([]);
+  const [evalSummariesLoading, setEvalSummariesLoading] = useState(false);
+  const [evalSummariesError, setEvalSummariesError] = useState<string | null>(null);
+  const [evalDetailOpen, setEvalDetailOpen] = useState(false);
+  const [evalDetailActivity, setEvalDetailActivity] = useState<
+    | {
+        projectId: string;
+        activityId: number;
+        activityTitle: string;
+      }
+    | null
+  >(null);
+  const [evalDetailRows, setEvalDetailRows] = useState<
+    Array<{
+      participantEmail: string;
+      collegeDept: string;
+      ratings: Record<string, number>;
+      comments: string;
+      suggestions: string;
+      createdAt?: string;
+    }>
+  >([]);
+  const [evalDetailLoading, setEvalDetailLoading] = useState(false);
+  const [evalDetailError, setEvalDetailError] = useState<string | null>(null);
   const fetchPendingRequests = async () => {
     setLoading(true);
     setError(null);
@@ -291,6 +325,7 @@ export default function ProjectLeaderParticipantsPage() {
       const projects = (await resProjects.json()) as Array<{ _id: string; name?: string }>;
       if (!projects.length) {
         setApprovedRows([]);
+        setLeaderProjects([]);
         return;
       }
 
@@ -299,6 +334,11 @@ export default function ProjectLeaderParticipantsPage() {
       projects.forEach((p) => {
         projectNameById[p._id] = p.name || 'Untitled project';
       });
+
+      setLeaderProjects(projects);
+      if (!selectedEvalProjectId) {
+        setSelectedEvalProjectId(projects[0]._id);
+      }
 
       const beneficiariesByProject: Record<string, Array<{ email: string }>> = {};
       const uniqueEmails = new Set<string>();
@@ -411,6 +451,45 @@ export default function ProjectLeaderParticipantsPage() {
   }, []);
 
   useEffect(() => {
+    const run = async () => {
+      if (!selectedEvalProjectId) {
+        setEvalSummaries([]);
+        setEvalSummariesError(null);
+        return;
+      }
+
+      setEvalSummariesLoading(true);
+      setEvalSummariesError(null);
+      try {
+        const res = await fetch(
+          `http://localhost:5000/api/projects/${encodeURIComponent(selectedEvalProjectId)}/evaluations-summary`,
+        );
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          throw new Error((data as any).message || 'Failed to load evaluation summaries');
+        }
+
+        const data = (await res.json()) as Array<{
+          activityId: number;
+          activityTitle: string;
+          totalResponses: number;
+          overallAverage: number;
+          perQuestionAverages: Record<string, number>;
+        }>;
+
+        setEvalSummaries(Array.isArray(data) ? data : []);
+      } catch (err: any) {
+        setEvalSummariesError(err.message || 'Failed to load evaluation summaries');
+        setEvalSummaries([]);
+      } finally {
+        setEvalSummariesLoading(false);
+      }
+    };
+
+    run();
+  }, [selectedEvalProjectId]);
+
+  useEffect(() => {
     const socket = io('http://localhost:5000');
 
     socket.on('notification:new', (payload: any) => {
@@ -511,6 +590,206 @@ export default function ProjectLeaderParticipantsPage() {
     return row.kind === 'approved';
   });
 
+  const handleExportApprovedCsv = () => {
+    if (!approvedRows.length) return;
+
+    const header = ['Email', 'Project', 'Activity', 'Status', 'Last updated'];
+    const lines: string[][] = [];
+
+    approvedRows.forEach((row) => {
+      if (!row.activities.length) {
+        lines.push([row.email, row.projectName, '', 'No activities', '']);
+        return;
+      }
+
+      row.activities.forEach((activity) => {
+        const statusLabel =
+          activity.status === 'present'
+            ? 'Present'
+            : activity.status === 'absent'
+            ? 'Absent'
+            : 'Registered';
+
+        const updated = activity.updatedAt
+          ? new Date(activity.updatedAt).toLocaleString('en-PH')
+          : '';
+
+        lines.push([
+          row.email,
+          row.projectName,
+          activity.activityTitle,
+          statusLabel,
+          updated,
+        ]);
+      });
+    });
+
+    const csv = [header, ...lines]
+      .map((cols) =>
+        cols
+          .map((value) => {
+            const v = value ?? '';
+            if (typeof v !== 'string') return String(v);
+            const needsQuotes = v.includes(',') || v.includes('\n') || v.includes('"');
+            const escaped = v.replace(/"/g, '""');
+            return needsQuotes ? `"${escaped}"` : escaped;
+          })
+          .join(','),
+      )
+      .join('\n');
+
+    try {
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', 'unihub-approved-beneficiaries.csv');
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    } catch {
+      // if export fails, nothing critical; table view still works
+    }
+  };
+
+  const fetchEvaluationDetails = async (projectId: string, activityId: number, activityTitle: string) => {
+    setEvalDetailLoading(true);
+    setEvalDetailError(null);
+    setEvalDetailActivity({ projectId, activityId, activityTitle });
+    try {
+      const res = await fetch(
+        `http://localhost:5000/api/projects/${encodeURIComponent(
+          projectId,
+        )}/activities/${encodeURIComponent(String(activityId))}/evaluations`,
+      );
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error((data as any).message || 'Failed to load evaluation responses');
+      }
+
+      const data = (await res.json()) as Array<{
+        projectId: string;
+        activityId: number;
+        participantEmail: string;
+        collegeDept: string;
+        ratings: Record<string, number>;
+        comments: string;
+        suggestions: string;
+        createdAt?: string;
+        updatedAt?: string;
+      }>;
+
+      const rows = data.map((row) => ({
+        participantEmail: row.participantEmail,
+        collegeDept: row.collegeDept ?? '',
+        ratings: row.ratings ?? {},
+        comments: row.comments ?? '',
+        suggestions: row.suggestions ?? '',
+        createdAt: row.createdAt,
+      }));
+      setEvalDetailRows(rows);
+    } catch (err: any) {
+      setEvalDetailError(err.message || 'Failed to load evaluation responses');
+      setEvalDetailRows([]);
+    } finally {
+      setEvalDetailLoading(false);
+    }
+  };
+
+  const handleOpenEvaluationDetail = (projectId: string, activityId: number, activityTitle: string) => {
+    setEvalDetailOpen(true);
+    setEvalDetailRows([]);
+    setEvalDetailError(null);
+    fetchEvaluationDetails(projectId, activityId, activityTitle);
+  };
+
+  const handleExportEvaluationCsv = async (projectId: string, activityId: number, activityTitle: string) => {
+    try {
+      const res = await fetch(
+        `http://localhost:5000/api/projects/${encodeURIComponent(
+          projectId,
+        )}/activities/${encodeURIComponent(String(activityId))}/evaluations`,
+      );
+      if (!res.ok) {
+        return;
+      }
+
+      const data = (await res.json()) as Array<{
+        participantEmail: string;
+        collegeDept: string;
+        ratings: Record<string, number>;
+        comments: string;
+        suggestions: string;
+        createdAt?: string;
+      }>;
+
+      if (!Array.isArray(data) || data.length === 0) {
+        return;
+      }
+
+      const allKeys = new Set<string>();
+      data.forEach((row) => {
+        Object.keys(row.ratings || {}).forEach((key) => {
+          if (key) allKeys.add(key);
+        });
+      });
+
+      const ratingKeys = Array.from(allKeys);
+
+      const header = [
+        'Participant Email',
+        'College / Department',
+        ...ratingKeys,
+        'Comments',
+        'Suggestions',
+        'Submitted at',
+      ];
+
+      const rows = data.map((row) => {
+        const submittedAt = row.createdAt ? new Date(row.createdAt).toLocaleString('en-PH') : '';
+        const ratingValues = ratingKeys.map((key) => {
+          const value = (row.ratings || {})[key];
+          return typeof value === 'number' && Number.isFinite(value) ? value.toString() : '';
+        });
+        return [
+          row.participantEmail ?? '',
+          row.collegeDept ?? '',
+          ...ratingValues,
+          row.comments ?? '',
+          row.suggestions ?? '',
+          submittedAt,
+        ];
+      });
+
+      const csv = [header, ...rows]
+        .map((cols) =>
+          cols
+            .map((value) => {
+              const v = value ?? '';
+              if (typeof v !== 'string') return String(v);
+              const needsQuotes = v.includes(',') || v.includes('\n') || v.includes('"');
+              const escaped = v.replace(/"/g, '""');
+              return needsQuotes ? `"${escaped}"` : escaped;
+            })
+            .join(','),
+        )
+        .join('\n');
+
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      const safeTitle = activityTitle.replace(/[^a-z0-9_-]+/gi, '_');
+      link.href = url;
+      link.setAttribute('download', `${safeTitle || 'activity'}-evaluations.csv`);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    } catch {
+    }
+  };
+
   return (
     <div className="space-y-6">
       <header className="flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
@@ -525,37 +804,47 @@ export default function ProjectLeaderParticipantsPage() {
       <section className="rounded-2xl border border-yellow-100 bg-white/80 p-6">
         <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
           <h2 className="text-sm font-semibold text-gray-900">Participants (pending & approved)</h2>
-          <div className="flex items-center gap-2 text-[11px]">
-            <span className="font-medium text-gray-700">Filter by status:</span>
-            <div className="inline-flex overflow-hidden rounded-full border border-yellow-200 bg-yellow-50 text-[11px] font-medium text-gray-700">
-              <button
-                type="button"
-                onClick={() => setStatusFilter('all')}
-                className={`px-3 py-1 transition ${
-                  statusFilter === 'all' ? 'bg-yellow-500 text-white' : 'hover:bg-yellow-100'
-                }`}
-              >
-                All
-              </button>
-              <button
-                type="button"
-                onClick={() => setStatusFilter('pending')}
-                className={`px-3 py-1 transition ${
-                  statusFilter === 'pending' ? 'bg-yellow-500 text-white' : 'hover:bg-yellow-100'
-                }`}
-              >
-                Pending
-              </button>
-              <button
-                type="button"
-                onClick={() => setStatusFilter('approved')}
-                className={`px-3 py-1 transition ${
-                  statusFilter === 'approved' ? 'bg-yellow-500 text-white' : 'hover:bg-yellow-100'
-                }`}
-              >
-                Approved
-              </button>
+          <div className="flex flex-col gap-2 text-[11px] sm:flex-row sm:items-center sm:gap-3">
+            <div className="flex items-center gap-2">
+              <span className="font-medium text-gray-700">Filter by status:</span>
+              <div className="inline-flex overflow-hidden rounded-full border border-yellow-200 bg-yellow-50 text-[11px] font-medium text-gray-700">
+                <button
+                  type="button"
+                  onClick={() => setStatusFilter('all')}
+                  className={`px-3 py-1 transition ${
+                    statusFilter === 'all' ? 'bg-yellow-500 text-white' : 'hover:bg-yellow-100'
+                  }`}
+                >
+                  All
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setStatusFilter('pending')}
+                  className={`px-3 py-1 transition ${
+                    statusFilter === 'pending' ? 'bg-yellow-500 text-white' : 'hover:bg-yellow-100'
+                  }`}
+                >
+                  Pending
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setStatusFilter('approved')}
+                  className={`px-3 py-1 transition ${
+                    statusFilter === 'approved' ? 'bg-yellow-500 text-white' : 'hover:bg-yellow-100'
+                  }`}
+                >
+                  Approved
+                </button>
+              </div>
             </div>
+            <button
+              type="button"
+              onClick={handleExportApprovedCsv}
+              disabled={!approvedRows.length}
+              className="inline-flex items-center justify-center rounded-full border border-yellow-200 px-3 py-1 text-[11px] font-semibold text-yellow-700 hover:bg-yellow-50 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              Export approved as CSV
+            </button>
           </div>
         </div>
 
@@ -723,6 +1012,99 @@ export default function ProjectLeaderParticipantsPage() {
         )}
       </section>
 
+      <section className="rounded-2xl border border-yellow-100 bg-white/80 p-6">
+        <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h2 className="text-sm font-semibold text-gray-900">Activity evaluations (client satisfaction)</h2>
+            <p className="text-xs text-gray-500">
+              View average scores and response counts for activities that have post-activity surveys.
+            </p>
+          </div>
+          <div className="flex flex-col gap-2 text-[11px] sm:flex-row sm:items-center sm:gap-3">
+            <div className="flex items-center gap-2">
+              <span className="font-medium text-gray-700">Project:</span>
+              <select
+                className="rounded-full border border-yellow-200 bg-white px-3 py-1 text-[11px] text-gray-800 focus:border-yellow-400 focus:outline-none focus:ring-1 focus:ring-yellow-300"
+                value={selectedEvalProjectId}
+                onChange={(event) => setSelectedEvalProjectId(event.target.value)}
+              >
+                {leaderProjects.length === 0 ? (
+                  <option value="">No projects available</option>
+                ) : (
+                  <>
+                    {leaderProjects.map((project) => (
+                      <option key={project._id} value={project._id}>
+                        {project.name || 'Untitled project'}
+                      </option>
+                    ))}
+                  </>
+                )}
+              </select>
+            </div>
+          </div>
+        </div>
+
+        {evalSummariesLoading ? (
+          <div className="text-center text-sm text-gray-600">Loading evaluation summaries...</div>
+        ) : evalSummariesError ? (
+          <div className="text-center text-sm text-red-600">{evalSummariesError}</div>
+        ) : !selectedEvalProjectId ? (
+          <div className="text-center text-sm text-gray-600">
+            Select a project to view its activity evaluation summaries.
+          </div>
+        ) : evalSummaries.length === 0 ? (
+          <div className="text-center text-sm text-gray-600">
+            No evaluation responses yet for this project's activities.
+          </div>
+        ) : (
+          <div className="overflow-x-auto rounded-xl border border-yellow-100 bg-yellow-50/40">
+            <table className="min-w-full text-left text-xs text-gray-800">
+              <thead className="bg-yellow-50 text-[11px] font-semibold uppercase tracking-wide text-gray-600">
+                <tr>
+                  <th className="px-3 py-2">Activity</th>
+                  <th className="px-3 py-2 text-center">Total responses</th>
+                  <th className="px-3 py-2 text-center">Overall average</th>
+                  <th className="px-3 py-2">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {evalSummaries.map((row) => (
+                  <tr key={row.activityId} className="border-t border-yellow-100">
+                    <td className="px-3 py-2 text-xs font-medium text-gray-900">{row.activityTitle}</td>
+                    <td className="px-3 py-2 text-center text-xs text-gray-700">{row.totalResponses}</td>
+                    <td className="px-3 py-2 text-center text-xs text-gray-700">
+                      {Number.isFinite(row.overallAverage) ? row.overallAverage.toFixed(2) : '0.00'}
+                    </td>
+                    <td className="px-3 py-2 text-xs">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            handleOpenEvaluationDetail(selectedEvalProjectId, row.activityId, row.activityTitle)
+                          }
+                          className="rounded-full border border-yellow-200 px-3 py-1 text-[11px] font-semibold text-yellow-700 hover:bg-yellow-50"
+                        >
+                          View responses
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            handleExportEvaluationCsv(selectedEvalProjectId, row.activityId, row.activityTitle)
+                          }
+                          className="rounded-full border border-yellow-200 px-3 py-1 text-[11px] font-semibold text-yellow-700 hover:bg-yellow-50"
+                        >
+                          Export CSV
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+
       {activitiesModalOpen && activitiesModalRow && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4" role="dialog" aria-modal="true">
           <div className="w-full max-w-lg rounded-2xl border border-yellow-100 bg-white p-6 text-sm text-gray-800 shadow-xl">
@@ -826,6 +1208,99 @@ export default function ProjectLeaderParticipantsPage() {
                   );
                 })}
               </ul>
+            )}
+          </div>
+        </div>
+      )}
+
+      {evalDetailOpen && evalDetailActivity && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4" role="dialog" aria-modal="true">
+          <div className="w-full max-w-3xl rounded-2xl border border-yellow-100 bg-white p-6 text-sm text-gray-800 shadow-xl">
+            <div className="mb-4 flex items-start justify-between gap-3">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wide text-yellow-500">Activity evaluations</p>
+                <h3 className="mt-1 text-base font-semibold text-gray-900 line-clamp-2">
+                  {evalDetailActivity.activityTitle}
+                </h3>
+                <p className="mt-1 text-[11px] text-gray-500">
+                  {evalDetailRows.length} response
+                  {evalDetailRows.length === 1 ? '' : 's'}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setEvalDetailOpen(false);
+                  setEvalDetailActivity(null);
+                  setEvalDetailRows([]);
+                  setEvalDetailError(null);
+                }}
+                className="rounded-full border border-yellow-200 px-3 py-1 text-xs font-semibold text-yellow-700 hover:bg-yellow-50"
+              >
+                Close
+              </button>
+            </div>
+
+            {evalDetailError && (
+              <p className="mb-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+                {evalDetailError}
+              </p>
+            )}
+
+            {evalDetailLoading ? (
+              <p className="text-sm text-gray-600">Loading responses...</p>
+            ) : evalDetailRows.length === 0 ? (
+              <p className="text-sm text-gray-600">No responses yet for this activity.</p>
+            ) : (
+              <div className="max-h-[420px] space-y-3 overflow-y-auto pr-1 text-sm text-gray-800">
+                {evalDetailRows.map((row, index) => (
+                  <div
+                    key={`${row.participantEmail || 'anon'}:${index}`}
+                    className="rounded-xl border border-yellow-100 bg-yellow-50/60 p-3 text-xs text-gray-800"
+                  >
+                    <div className="mb-1 flex flex-wrap items-baseline justify-between gap-2">
+                      <div className="space-x-2">
+                        <span className="font-semibold text-gray-900">
+                          {row.participantEmail || 'Anonymous'}
+                        </span>
+                        {row.collegeDept && (
+                          <span className="text-[11px] text-gray-600">({row.collegeDept})</span>
+                        )}
+                      </div>
+                      {row.createdAt && (
+                        <span className="text-[10px] text-gray-500">
+                          {new Date(row.createdAt).toLocaleString('en-PH')}
+                        </span>
+                      )}
+                    </div>
+                    {Object.keys(row.ratings || {}).length > 0 && (
+                      <div className="mb-1 flex flex-wrap gap-1">
+                        {Object.entries(row.ratings).map(([key, value]) => (
+                          <span
+                            key={key}
+                            className="inline-flex items-center rounded-full bg-white/80 px-2 py-0.5 text-[10px] font-medium text-gray-800"
+                          >
+                            <span className="mr-1 text-gray-500">{key}:</span>
+                            <span>{Number.isFinite(value) ? value.toFixed(2) : String(value)}</span>
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                    {row.comments && (
+                      <p className="mt-1 text-[11px] text-gray-800">
+                        <span className="font-semibold text-gray-700">Comments: </span>
+                        {row.comments}
+                      </p>
+                    )}
+                    {row.suggestions && (
+                      <p className="mt-0.5 text-[11px] text-gray-800">
+                        <span className="font-semibold text-gray-700">Suggestions: </span>
+                        {row.suggestions}
+                      </p>
+                    )}
+                  </div>
+                ))}
+              </div>
             )}
           </div>
         </div>

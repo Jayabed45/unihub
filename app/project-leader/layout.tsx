@@ -107,7 +107,13 @@ export default function ProjectLeaderLayout({ children }: { children: ReactNode 
             (item) =>
               item.title !== 'New project created' &&
               item.title !== 'Join request approved' &&
-              item.title !== 'Join request declined',
+              item.title !== 'Join request declined' &&
+              item.title !== 'Activity attendance updated' &&
+              item.title !== 'Activity Starting Soon' &&
+              item.title !== 'Activity Started' &&
+              item.title !== 'Activity Ending Soon' &&
+              item.title !== 'Activity Ended' &&
+              item.title !== 'Activity Evaluation',
           );
 
         setNotifications(mapped);
@@ -123,12 +129,31 @@ export default function ProjectLeaderLayout({ children }: { children: ReactNode 
     const socket = io('http://localhost:5000');
     socketRef.current = socket;
 
+    // Identify the currently authenticated project leader for online/offline tracking
+    try {
+      const stored = window.localStorage.getItem(STORAGE_KEY);
+      if (stored) {
+        const parsed = JSON.parse(stored) as StoredUser | null;
+        if (parsed?.id) {
+          socket.emit('identify', { userId: parsed.id });
+        }
+      }
+    } catch {
+      // best-effort only
+    }
+
     socket.on('notification:new', (payload: NotificationItem) => {
-      // Respect the existing filter: do not show certain system-wide notifications on leader side
+      // Respect the existing filter: do not show certain system-wide or participant-only notifications on leader side
       if (
         payload.title === 'New project created' ||
         payload.title === 'Join request approved' ||
-        payload.title === 'Join request declined'
+        payload.title === 'Join request declined' ||
+        payload.title === 'Activity attendance updated' ||
+        payload.title === 'Activity Starting Soon' ||
+        payload.title === 'Activity Started' ||
+        payload.title === 'Activity Ending Soon' ||
+        payload.title === 'Activity Ended' ||
+        payload.title === 'Activity Evaluation'
       ) {
         return;
       }
@@ -248,6 +273,22 @@ export default function ProjectLeaderLayout({ children }: { children: ReactNode 
 
       if (item.title === 'Join request') {
         router.push('/project-leader/participants');
+      } else if (item.title === 'Activity join' && item.projectId) {
+        let activityTitle = '';
+        if (item.message) {
+          const match = item.message.match(/joined activity\s+"(.+?)"/);
+          if (match && match[1]) {
+            activityTitle = match[1].trim();
+          }
+        }
+
+        const params = new URLSearchParams();
+        params.set('highlightProjectId', item.projectId);
+        if (activityTitle) {
+          params.set('highlightActivityTitle', activityTitle);
+        }
+
+        router.push(`/project-leader/projects?${params.toString()}`);
       } else if (item.projectId) {
         router.push(`/project-leader/projects?highlightProjectId=${item.projectId}`);
       }
@@ -260,7 +301,7 @@ export default function ProjectLeaderLayout({ children }: { children: ReactNode 
   }
 
   return (
-    <div className="flex min-h-screen bg-gradient-to-br from-yellow-50 via-white to-white">
+    <div className="flex h-screen overflow-hidden bg-gradient-to-br from-yellow-50 via-white to-white">
       {logoutProgress > 0 && (
         <div className="fixed inset-x-0 top-0 z-50">
           <div
@@ -269,9 +310,11 @@ export default function ProjectLeaderLayout({ children }: { children: ReactNode 
           />
         </div>
       )}
-      <Sidebar items={projectLeaderNavigation} onLogout={handleLogout} logoutDisabled={isLoggingOut} />
+      <div className="sticky top-0 h-screen">
+        <Sidebar items={projectLeaderNavigation} onLogout={handleLogout} logoutDisabled={isLoggingOut} />
+      </div>
 
-      <main className="flex-1">
+      <main className="flex-1 overflow-y-auto">
         <HeaderBar
           onToggleNotifications={handleToggleNotifications}
           notificationsOpen={notificationsOpen}

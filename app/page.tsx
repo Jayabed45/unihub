@@ -34,6 +34,8 @@ export default function HomePage() {
   const [loading, setLoading] = useState(false);
   const [progress, setProgress] = useState(0);
   const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
+  const [loginOtpRequired, setLoginOtpRequired] = useState(false);
+  const [loginOtp, setLoginOtp] = useState('');
   const router = useRouter();
   const isRedirecting = !!user;
   const isLoginMode = authMode === 'login';
@@ -112,6 +114,8 @@ export default function HomePage() {
     setError('');
     setNotice('');
     setProgress(0);
+    setLoginOtpRequired(false);
+    setLoginOtp('');
     setAuthMode(isLoginMode ? 'register' : 'login');
   };
 
@@ -123,32 +127,48 @@ export default function HomePage() {
     setProgress(10);
 
     try {
+      if (loginOtpRequired && !loginOtp.trim()) {
+        throw new Error('Please enter the verification code that was sent to your email.');
+      }
+
       const res = await fetch('http://localhost:5000/api/auth/login', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify(
+          loginOtpRequired && loginOtp.trim()
+            ? { email, password, otp: loginOtp.trim() }
+            : { email, password },
+        ),
       });
 
+      const data = await res.json().catch(() => ({}));
+
       if (!res.ok) {
-        const data = await res.json();
-        throw new Error(data.message || 'Something went wrong');
+        throw new Error((data as any).message || 'Something went wrong');
       }
 
-      const data = await res.json();
+      if ((data as any).requiresVerification) {
+        setLoginOtpRequired(true);
+        setLoginOtp('');
+        setNotice((data as any).message || 'We sent a verification code to your email. Please enter it to continue.');
+        setError('');
+        return;
+      }
+
       console.log('Login successful:', data);
-      // NOTE: The backend currently returns a role name. 
-      // In a real app, you might get a role ID and fetch details.
       const authenticatedUser = {
-        id: data.user.id,
-        role: data.user.role,
-        token: data.token,
-        email: data.user.email,
+        id: (data as any).user.id,
+        role: (data as any).user.role,
+        token: (data as any).token,
+        email: (data as any).user.email,
       } as User;
       setProgress(100);
       setUser(authenticatedUser);
       localStorage.setItem(STORAGE_KEY, JSON.stringify(authenticatedUser));
+      setLoginOtpRequired(false);
+      setLoginOtp('');
     } catch (err: any) {
       setError(err.message);
       localStorage.removeItem(STORAGE_KEY);
@@ -188,10 +208,10 @@ export default function HomePage() {
           role: registerRole,
         }),
       });
+      const data = await res.json().catch(() => ({}));
 
       if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data.message || 'Registration failed. Please try again.');
+        throw new Error((data as any).message || 'Registration failed. Please try again.');
       }
 
       setProgress(100);
@@ -201,7 +221,10 @@ export default function HomePage() {
       setRegisterConfirmPassword('');
       setRegisterRole('Participant');
       setAuthMode('login');
-      setNotice('Registration successful. Please log in.');
+      setNotice(
+        (data as any).message ||
+          'Registration successful. Please check your email for a verification code, then log in.',
+      );
     } catch (err: any) {
       console.error('Registration failed', err);
       setError(err.message || 'Registration failed. Please try again.');
@@ -385,6 +408,35 @@ export default function HomePage() {
                         />
                       </div>
                     </div>
+
+                    {loginOtpRequired && (
+                      <div className="space-y-1">
+                        <label
+                          htmlFor="otp"
+                          className="text-xs font-semibold uppercase tracking-wide text-gray-500"
+                        >
+                          Verification code
+                        </label>
+                        <div className="relative">
+                          <input
+                            id="otp"
+                            name="otp"
+                            type="text"
+                            inputMode="numeric"
+                            pattern="[0-9]*"
+                            required
+                            value={loginOtp}
+                            onChange={(e) => setLoginOtp(e.target.value)}
+                            disabled={loading || isRedirecting}
+                            className="w-full rounded-xl border border-emerald-100/80 bg-white/90 py-3 px-4 text-sm text-gray-900 shadow-inner shadow-emerald-50 transition focus:border-emerald-400 focus:shadow-lg focus:ring-2 focus:ring-emerald-200 disabled:cursor-not-allowed disabled:opacity-60"
+                            placeholder="Enter the 6-digit code sent to your email"
+                          />
+                        </div>
+                        <p className="text-[11px] text-gray-500">
+                          We sent a one-time verification code to your email. Enter it here to finish signing in.
+                        </p>
+                      </div>
+                    )}
 
                     <div className="flex items-center justify-between text-xs text-gray-500">
                       <label className="inline-flex items-center gap-2">

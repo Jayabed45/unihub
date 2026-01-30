@@ -105,10 +105,16 @@ export default function ParticipantLayout({ children }: { children: ReactNode })
           }))
           .filter(
             (item) =>
-              item.title !== 'New project created' &&
-              item.title !== 'Join request' &&
-              item.title !== 'Project approved' &&
-              item.title !== 'Activity join',
+              (item.title === 'Activity Starting Soon' ||
+                item.title === 'Activity Started' ||
+                item.title === 'Activity Ending Soon' ||
+                item.title === 'Activity Ended') ||
+              ![
+                'New project created',
+                'Join request',
+                'Project approved',
+                'Activity join',
+              ].includes(item.title)
           );
 
         setNotifications(mapped);
@@ -124,12 +130,31 @@ export default function ParticipantLayout({ children }: { children: ReactNode })
     const socket = io('http://localhost:5000');
     socketRef.current = socket;
 
+    // Identify the currently authenticated participant for online/offline tracking
+    try {
+      const stored = window.localStorage.getItem(STORAGE_KEY);
+      if (stored) {
+        const parsed = JSON.parse(stored) as StoredUser | null;
+        if (parsed?.id) {
+          socket.emit('identify', { userId: parsed.id });
+        }
+      }
+    } catch {
+      // best-effort only
+    }
+
     socket.on('notification:new', (payload: NotificationItem) => {
       if (
-        payload.title === 'New project created' ||
+        (payload.title === 'New project created' ||
         payload.title === 'Join request' ||
         payload.title === 'Project approved' ||
-        payload.title === 'Activity join'
+        payload.title === 'Activity join') &&
+        ![
+          'Activity Starting Soon',
+          'Activity Started',
+          'Activity Ending Soon',
+          'Activity Ended'
+        ].includes(payload.title)
       ) {
         return;
       }
@@ -226,29 +251,91 @@ export default function ParticipantLayout({ children }: { children: ReactNode })
     });
   }, []);
 
-  const handleNotificationClick = useCallback((item: NotificationItem) => {
-    setNotificationsOpen(false);
+  const handleNotificationClick = useCallback(
+    (item: NotificationItem) => {
+      setNotificationsOpen(false);
 
-    setNotifications((current) => current.map((n) => (n.id === item.id ? { ...n, read: true } : n)));
+      setNotifications((current) => current.map((n) => (n.id === item.id ? { ...n, read: true } : n)));
 
-    setToastNotification((current) => (current && current.id === item.id ? null : current));
-    setToastVisible(false);
+      setToastNotification((current) => (current && current.id === item.id ? null : current));
+      setToastVisible(false);
 
-    window
-      .fetch(`http://localhost:5000/api/notifications/${item.id}/read`, {
-        method: 'PATCH',
-      })
-      .catch((error) => {
-        console.error('Failed to mark notification as read (participant)', error);
-      });
-  }, []);
+      window
+        .fetch(`http://localhost:5000/api/notifications/${item.id}/read`, {
+          method: 'PATCH',
+        })
+        .catch((error) => {
+          console.error('Failed to mark notification as read (participant)', error);
+        });
+
+      if (item.title === 'Activity Evaluation' && item.message) {
+        try {
+          const msg = item.message;
+          const startBracket = msg.indexOf('[');
+          const endBracket = msg.indexOf(']');
+
+          let projectName = '';
+          let activityTitle = '';
+
+          if (startBracket !== -1 && endBracket > startBracket) {
+            projectName = msg.substring(startBracket + 1, endBracket).trim();
+            const after = msg.substring(endBracket + 1);
+            const colonIndex = after.indexOf(':');
+            const titlePart = colonIndex !== -1 ? after.substring(0, colonIndex) : after;
+            activityTitle = titlePart.trim();
+          }
+
+          const intent: {
+            projectId?: string;
+            projectName?: string;
+            activityTitle?: string;
+            email?: string;
+          } = {};
+
+          if (item.projectId) {
+            intent.projectId = item.projectId;
+          }
+          if (projectName) {
+            intent.projectName = projectName;
+          }
+          if (activityTitle) {
+            intent.activityTitle = activityTitle;
+          }
+
+          try {
+            const stored = window.localStorage.getItem(STORAGE_KEY);
+            if (stored) {
+              const parsed = JSON.parse(stored) as StoredUser | null;
+              if (parsed?.email && typeof parsed.email === 'string') {
+                intent.email = parsed.email;
+              }
+            }
+          } catch {
+            // ignore auth parsing errors for evaluation intent
+          }
+
+          window.localStorage.setItem('unihub-activity-eval-intent', JSON.stringify(intent));
+
+          try {
+            window.dispatchEvent(new Event('unihub-activity-eval-intent'));
+          } catch {
+          }
+
+          router.push('/participant/Feeds');
+        } catch (error) {
+          console.error('Failed to process Activity Evaluation notification click', error);
+        }
+      }
+    },
+    [router],
+  );
 
   if (!isAuthorized && !isLoggingOut) {
     return null;
   }
 
   return (
-    <div className="flex min-h-screen bg-gradient-to-br from-amber-50 via-white to-white">
+    <div className="flex h-screen overflow-hidden bg-gradient-to-br from-amber-50 via-white to-white">
       {logoutProgress > 0 && (
         <div className="fixed inset-x-0 top-0 z-50">
           <div
@@ -258,9 +345,11 @@ export default function ParticipantLayout({ children }: { children: ReactNode })
         </div>
       )}
 
-      <Sidebar items={participantNavigation} onLogout={handleLogout} logoutDisabled={isLoggingOut} />
+      <div className="sticky top-0 h-screen">
+        <Sidebar items={participantNavigation} onLogout={handleLogout} logoutDisabled={isLoggingOut} />
+      </div>
 
-      <main className="flex-1">
+      <main className="flex-1 overflow-y-auto">
         <HeaderBar
           onToggleNotifications={handleToggleNotifications}
           notificationsOpen={notificationsOpen}

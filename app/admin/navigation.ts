@@ -1,4 +1,4 @@
-import { LayoutGrid, FolderKanban, Users, BarChart3 } from 'lucide-react';
+import { LayoutGrid, FolderKanban, Users } from 'lucide-react';
 
 export const adminNavigation = [
   {
@@ -18,12 +18,6 @@ export const adminNavigation = [
     description: 'Oversee user accounts and roles.',
     icon: Users,
     href: '/admin/users',
-  },
-  {
-    name: 'Statistics',
-    description: 'Analytics across projects and participants.',
-    icon: BarChart3,
-    href: '/admin/statistics',
   },
 ] as const;
 

@@ -1,5 +1,11 @@
 import mongoose, { Schema, Document } from 'mongoose';
 
+export interface IProjectActivitySchedule {
+  activityId: number;
+  startAt?: Date;
+  endAt?: Date;
+}
+
 export interface IProject extends Document {
   name: string;
   description: string;
@@ -9,6 +15,7 @@ export interface IProject extends Document {
   summary?: any;
   evaluation?: any;
   status: 'Pending' | 'Approved' | 'Rejected';
+  activitySchedule?: IProjectActivitySchedule[];
 }
 
 const ProjectSchema: Schema = new Schema({
@@ -19,6 +26,13 @@ const ProjectSchema: Schema = new Schema({
   proposalData: { type: Schema.Types.Mixed, required: false },
   summary: { type: Schema.Types.Mixed, required: false },
   evaluation: { type: Schema.Types.Mixed, required: false },
+  activitySchedule: [
+    {
+      activityId: { type: Number, required: true },
+      startAt: { type: Date, required: false },
+      endAt: { type: Date, required: false },
+    },
+  ],
   status: {
     type: String,
     enum: ['Pending', 'Approved', 'Rejected'],

@@ -32,6 +32,7 @@ export default function AdminProjectsPage() {
   >([]);
   const [beneficiariesLoading, setBeneficiariesLoading] = useState(false);
   const [beneficiariesError, setBeneficiariesError] = useState<string | null>(null);
+  const [beneficiariesUpdatingEmail, setBeneficiariesUpdatingEmail] = useState<string | null>(null);
 
   const [evaluationTitle, setEvaluationTitle] = useState('');
   const [evaluationCampus, setEvaluationCampus] = useState('');
@@ -201,60 +202,102 @@ export default function AdminProjectsPage() {
     };
   }, [beneficiariesOpen, beneficiariesProject]);
 
-  useEffect(() => {
-    if (!viewerVisible || !viewerData || !viewerRootRef.current) {
+  const handleExportBeneficiariesCsv = () => {
+    if (!beneficiariesProject || !beneficiaries.length) {
       return;
     }
 
-    const proposal = (viewerData as any).proposalData as Record<string, any> | undefined;
-    if (!proposal) return;
-
-    const root = viewerRootRef.current;
-
-    viewerSections.forEach((section) => {
-      const snapshot = proposal[section.id];
-      if (!snapshot) return;
-
-      const sectionElement = root.querySelector<HTMLElement>(
-        `[data-admin-section-id="${section.id}"]`,
-      );
-      if (!sectionElement) return;
-
-      if (Array.isArray(snapshot.inputs)) {
-        const inputs = Array.from(
-          sectionElement.querySelectorAll<
-            HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement
-          >('input, textarea, select'),
-        );
-
-        snapshot.inputs.forEach((saved: any, index: number) => {
-          const el = inputs[index];
-          if (!el) return;
-          const type = (el as HTMLInputElement).type;
-          const isCheckbox = type === 'checkbox';
-
-          if (!isCheckbox) {
-            if (saved && typeof saved.value !== 'undefined') {
-              (el as any).value = saved.value ?? '';
-            }
-          } else if (typeof saved?.checked === 'boolean') {
-            (el as any).checked = !!saved.checked;
-          }
-        });
-      }
-
-      if (Array.isArray(snapshot.editableCells)) {
-        const cells = Array.from(
-          sectionElement.querySelectorAll<HTMLElement>('[contenteditable="true"]'),
-        );
-        snapshot.editableCells.forEach((value: string, index: number) => {
-          const cell = cells[index];
-          if (!cell) return;
-          cell.innerText = value ?? '';
-        });
-      }
+    const header = ['Email', 'Status', 'Joined at', 'Last updated'];
+    const rows = beneficiaries.map((row) => {
+      const joined = row.joinedAt ? new Date(row.joinedAt).toLocaleString('en-PH') : '';
+      const updated = row.updatedAt ? new Date(row.updatedAt).toLocaleString('en-PH') : '';
+      return [row.email, row.status, joined, updated];
     });
-  }, [viewerVisible, viewerData, viewerSections, activeSectionId]);
+
+    const csv = [header, ...rows]
+      .map((cols) =>
+        cols
+          .map((value) => {
+            const v = value ?? '';
+            if (typeof v !== 'string') return String(v);
+            const needsQuotes = v.includes(',') || v.includes('\n') || v.includes('"');
+            const escaped = v.replace(/"/g, '""');
+            return needsQuotes ? `"${escaped}"` : escaped;
+          })
+          .join(','),
+      )
+      .join('\n');
+
+    try {
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      const safeName = (beneficiariesProject.name || 'project').replace(/[^a-z0-9_-]+/gi, '_');
+      link.href = url;
+      link.setAttribute('download', `${safeName}-beneficiaries.csv`);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    } catch {
+      // best-effort only; if it fails, user can still view list on screen
+    }
+  };
+
+  const handleExportProjectSummaryCsv = async () => {
+    try {
+      const res = await fetch('http://localhost:5000/api/projects/summary-xlsx');
+      if (!res.ok) {
+        return;
+      }
+
+      const blob = await res.blob();
+      if (!blob || blob.size === 0) {
+        return;
+      }
+
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', 'unihub-project-summary.xlsx');
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    } catch {
+    }
+  };
+
+  const handleRemoveBeneficiary = async (email: string) => {
+    if (!beneficiariesProject || !email) return;
+
+    setBeneficiariesError(null);
+    setBeneficiariesUpdatingEmail(email);
+
+    try {
+      const res = await fetch(
+        `http://localhost:5000/api/projects/${beneficiariesProject._id}/beneficiaries`,
+        {
+          method: 'PATCH',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ email, status: 'removed' }),
+        },
+      );
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error((data as any).message || 'Failed to update beneficiary');
+      }
+
+      setBeneficiaries((prev) => prev.filter((row) => row.email !== email));
+    } catch (err: any) {
+      setBeneficiariesError(err.message || 'Failed to update beneficiary');
+    } finally {
+      setBeneficiariesUpdatingEmail(null);
+    }
+  };
 
   useEffect(() => {
     // Ensure evaluation arrays always match criteria length
@@ -346,6 +389,15 @@ export default function AdminProjectsPage() {
           <p className="text-sm text-gray-600">
             Review project proposals submitted by project leaders and manage their approval status.
           </p>
+        </div>
+        <div className="mt-2 flex items-center md:mt-0">
+          <button
+            type="button"
+            onClick={handleExportProjectSummaryCsv}
+            className="rounded-full border border-amber-200 px-3 py-1 text-xs font-semibold text-amber-700 transition hover:bg-amber-50"
+          >
+            Export project summary (.xlsx)
+          </button>
         </div>
       </header>
 
@@ -813,15 +865,25 @@ export default function AdminProjectsPage() {
                   {beneficiariesProject.name}
                 </h2>
               </div>
-              <button
-                type="button"
-                onClick={() => {
-                  setBeneficiariesOpen(false);
-                }}
-                className="rounded-full border border-amber-200 px-3 py-1 text-xs font-semibold text-amber-700 hover:bg-amber-50"
-              >
-                Close
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleExportBeneficiariesCsv}
+                  disabled={!beneficiaries.length}
+                  className="rounded-full border border-amber-200 px-3 py-1 text-xs font-semibold text-amber-700 hover:bg-amber-50 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  Export CSV
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setBeneficiariesOpen(false);
+                  }}
+                  className="rounded-full border border-amber-200 px-3 py-1 text-xs font-semibold text-amber-700 hover:bg-amber-50"
+                >
+                  Close
+                </button>
+              </div>
             </div>
             <div className="flex-1 overflow-y-auto px-5 py-4 text-sm text-gray-800">
               {beneficiariesLoading ? (
@@ -851,6 +913,9 @@ export default function AdminProjectsPage() {
                         <th className="border border-amber-100 px-3 py-2 text-left font-semibold text-gray-700">
                           Last updated
                         </th>
+                        <th className="border border-amber-100 px-3 py-2 text-left font-semibold text-gray-700">
+                          Actions
+                        </th>
                       </tr>
                     </thead>
                     <tbody>
@@ -873,10 +938,20 @@ export default function AdminProjectsPage() {
                               </span>
                             </td>
                             <td className="border border-amber-100 px-3 py-2 text-[11px] sm:text-xs">
-                              {row.joinedAt || ' '}
+                              {row.joinedAt ? new Date(row.joinedAt).toLocaleString('en-PH') : ''}
                             </td>
                             <td className="border border-amber-100 px-3 py-2 text-[11px] sm:text-xs">
-                              {row.updatedAt || ' '}
+                              {row.updatedAt ? new Date(row.updatedAt).toLocaleString('en-PH') : ''}
+                            </td>
+                            <td className="border border-amber-100 px-3 py-2 text-[11px] sm:text-xs">
+                              <button
+                                type="button"
+                                onClick={() => handleRemoveBeneficiary(row.email)}
+                                disabled={beneficiariesUpdatingEmail === row.email}
+                                className="rounded-full border border-red-200 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-red-600 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-60"
+                              >
+                                {beneficiariesUpdatingEmail === row.email ? 'Removing…' : 'Remove'}
+                              </button>
                             </td>
                           </tr>
                         );

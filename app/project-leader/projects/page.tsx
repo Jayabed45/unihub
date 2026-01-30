@@ -75,6 +75,8 @@ interface ProjectActivity {
   title: string;
   hours?: string;
   resourcePerson?: string;
+  startAt?: string | null;
+  endAt?: string | null;
 }
 
 export default function ProjectLeaderProjectsPage() {
@@ -108,6 +110,7 @@ export default function ProjectLeaderProjectsPage() {
   const [showSubmitSuccess, setShowSubmitSuccess] = useState(false);
   const searchParams = useSearchParams();
   const highlightProjectId = searchParams.get('highlightProjectId');
+  const highlightActivityTitle = searchParams.get('highlightActivityTitle');
   const [currentPanelProjectStatus, setCurrentPanelProjectStatus] = useState<string | null>(null);
   const [activitiesModalOpen, setActivitiesModalOpen] = useState(false);
   const [activitiesModalProject, setActivitiesModalProject] = useState<LeaderProject | null>(null);
@@ -128,12 +131,32 @@ export default function ProjectLeaderProjectsPage() {
       }
     | null
   >(null);
+  const [activityScheduleDrafts, setActivityScheduleDrafts] = useState<
+    Record<string, { startAt: string; endAt: string }>
+  >({});
+  const [activityScheduleSavingKey, setActivityScheduleSavingKey] = useState<string | null>(null);
+  const [activityScheduleError, setActivityScheduleError] = useState<string | null>(null);
 
   const parseBudgetNumber = (rawValue: string): number => {
     const cleaned = rawValue.replace(/[^0-9.,-]/g, '').replace(/,/g, '');
     if (!cleaned.trim()) return 0;
     const parsed = parseFloat(cleaned);
     return Number.isNaN(parsed) ? 0 : parsed;
+  };
+
+  const toDateTimeLocalValue = (value?: string | null): string => {
+    if (!value) return '';
+    const d = new Date(value);
+    if (Number.isNaN(d.getTime())) return '';
+
+    const pad = (n: number) => n.toString().padStart(2, '0');
+    const year = d.getFullYear();
+    const month = pad(d.getMonth() + 1);
+    const day = pad(d.getDate());
+    const hours = pad(d.getHours());
+    const minutes = pad(d.getMinutes());
+
+    return `${year}-${month}-${day}T${hours}:${minutes}`;
   };
 
   const trainingExpensesSubtotal = useMemo(() => {
@@ -194,6 +217,50 @@ export default function ProjectLeaderProjectsPage() {
       : evaluationViewStatus === 'Rejected'
       ? 'bg-red-50 text-red-700 border-red-200'
       : 'bg-yellow-50 text-yellow-700 border-yellow-200';
+
+  const [nowMs, setNowMs] = useState(() => Date.now());
+
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      setNowMs(Date.now());
+    }, 30000);
+
+    return () => {
+      window.clearInterval(id);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!highlightProjectId || !highlightActivityTitle) {
+      return;
+    }
+
+    setHighlightedProjectActivity({
+      projectId: highlightProjectId,
+      activityTitle: highlightActivityTitle,
+    });
+  }, [highlightProjectId, highlightActivityTitle]);
+
+  const attendanceActivityStatus = (() => {
+    if (!attendanceActivity) {
+      return { isUpcoming: false, isOngoing: false, isExpired: false };
+    }
+
+    const startDate = attendanceActivity.startAt ? new Date(attendanceActivity.startAt) : undefined;
+    const endDate = attendanceActivity.endAt ? new Date(attendanceActivity.endAt) : undefined;
+
+    const hasValidStart = !!startDate && !Number.isNaN(startDate.getTime());
+    const hasValidEnd = !!endDate && !Number.isNaN(endDate.getTime());
+
+    const now = nowMs;
+    const isExpired = hasValidEnd && endDate!.getTime() < now;
+    const isOngoing = hasValidStart && hasValidEnd && startDate!.getTime() <= now && now <= endDate!.getTime();
+    const isUpcoming = hasValidStart && !isOngoing && !isExpired && startDate!.getTime() > now;
+
+    return { isUpcoming, isOngoing, isExpired };
+  })();
+
+  const canEditAttendance = attendanceActivityStatus.isOngoing;
 
   const activeItem = useMemo(() => {
     return (
@@ -1091,6 +1158,16 @@ export default function ProjectLeaderProjectsPage() {
 
     let parsed: ProjectActivity[] = [];
 
+    const schedule: Array<{ activityId: number; startAt?: string; endAt?: string }> = Array.isArray(
+      (project as any).activitySchedule,
+    )
+      ? ((project as any).activitySchedule as any[]).map((item) => ({
+          activityId: Number(item.activityId),
+          startAt: item.startAt as string | undefined,
+          endAt: item.endAt as string | undefined,
+        }))
+      : [];
+
     if (trainingSnapshot && Array.isArray(trainingSnapshot.editableCells)) {
       const cells: string[] = trainingSnapshot.editableCells;
       let activityIndexCounter = 0;
@@ -1106,10 +1183,14 @@ export default function ProjectLeaderProjectsPage() {
           continue;
         }
 
+        const scheduleEntry = schedule.find((item) => item.activityId === activityIndexCounter);
+
         parsed.push({
           activityId: activityIndexCounter,
           title,
           resourcePerson: resourcePerson || undefined,
+          startAt: scheduleEntry?.startAt ?? null,
+          endAt: scheduleEntry?.endAt ?? null,
         });
 
         activityIndexCounter += 1;
@@ -1128,6 +1209,71 @@ export default function ProjectLeaderProjectsPage() {
     setActivitiesForModal(parsed);
     setActivitiesModalProject(project);
     setActivitiesModalOpen(true);
+  };
+
+  const handleSaveActivitySchedule = async (
+    projectId: string,
+    activity: ProjectActivity,
+    startValue: string,
+    endValue: string,
+  ) => {
+    if (!projectId) return;
+
+    const scheduleKey = `${projectId}:${activity.activityId}`;
+    setActivityScheduleSavingKey(scheduleKey);
+    setActivityScheduleError(null);
+
+    try {
+      const body: Record<string, string> = {};
+      if (startValue) body.startAt = startValue;
+      if (endValue) body.endAt = endValue;
+
+      const res = await fetch(
+        `http://localhost:5000/api/projects/${projectId}/activities/${activity.activityId}/schedule`,
+        {
+          method: 'PATCH',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(body),
+        },
+      );
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.message || 'Failed to update activity schedule');
+      }
+
+      const data = (await res.json()) as {
+        activityId: number;
+        startAt?: string | null;
+        endAt?: string | null;
+      };
+
+      setActivitiesForModal((prev) =>
+        prev.map((item) =>
+          item.activityId === data.activityId
+            ? { ...item, startAt: data.startAt ?? null, endAt: data.endAt ?? null }
+            : item,
+        ),
+      );
+
+      setAttendanceActivity((prev) =>
+        prev && prev.activityId === data.activityId
+          ? { ...prev, startAt: data.startAt ?? null, endAt: data.endAt ?? null }
+          : prev,
+      );
+
+      setActivityScheduleDrafts((prev) => {
+        const next = { ...prev };
+        delete next[scheduleKey];
+        return next;
+      });
+    } catch (error: any) {
+      setActivityScheduleError(error.message || 'Failed to update activity schedule');
+    } finally {
+      setActivityScheduleSavingKey(null);
+    }
   };
 
   const openAttendanceView = (activity: ProjectActivity) => {
@@ -1181,6 +1327,60 @@ export default function ProjectLeaderProjectsPage() {
       setAttendanceUpdatingEmail(null);
     }
   };
+
+  useEffect(() => {
+    if (!attendanceViewOpen || !attendanceActivity || !activitiesModalProject) {
+      return;
+    }
+
+    let cancelled = false;
+
+    const run = async () => {
+      setAttendanceLoading(true);
+      setAttendanceError(null);
+
+      try {
+        const res = await fetch(
+          `http://localhost:5000/api/projects/${activitiesModalProject._id}/activities/${attendanceActivity.activityId}/registrations`,
+        );
+
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          throw new Error(data.message || 'Failed to load activity registrations');
+        }
+
+        const data = (await res.json()) as Array<{
+          participantEmail: string;
+          status: 'registered' | 'present' | 'absent';
+          updatedAt?: string;
+        }>;
+
+        if (!cancelled) {
+          setAttendanceRows(
+            data.map((row) => ({
+              participantEmail: row.participantEmail,
+              status: row.status,
+              updatedAt: row.updatedAt,
+            })),
+          );
+        }
+      } catch (err: any) {
+        if (!cancelled) {
+          setAttendanceError(err.message || 'Failed to load activity registrations');
+        }
+      } finally {
+        if (!cancelled) {
+          setAttendanceLoading(false);
+        }
+      }
+    };
+
+    run();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [attendanceViewOpen, attendanceActivity, activitiesModalProject]);
 
   const fetchProjects = async () => {
     setProjectsLoading(true);
@@ -1292,89 +1492,6 @@ export default function ProjectLeaderProjectsPage() {
       cancelled = true;
     };
   }, [viewProjectId, panelVisible]);
-
-  useEffect(() => {
-    if (!attendanceViewOpen || !attendanceActivity || !activitiesModalProject) {
-      return;
-    }
-
-    const fetchRegistrations = async () => {
-      setAttendanceLoading(true);
-      setAttendanceError(null);
-      try {
-        const res = await fetch(
-          `http://localhost:5000/api/projects/${activitiesModalProject._id}/activities/${attendanceActivity.activityId}/registrations`,
-        );
-        if (!res.ok) {
-          const data = await res.json().catch(() => ({}));
-          throw new Error(data.message || 'Failed to load activity registrations');
-        }
-
-        const data = (await res.json()) as Array<{
-          participantEmail: string;
-          status: 'registered' | 'present' | 'absent';
-          updatedAt?: string;
-        }>;
-
-        setAttendanceRows(data);
-      } catch (err: any) {
-        setAttendanceError(err.message || 'Failed to load activity registrations');
-      } finally {
-        setAttendanceLoading(false);
-      }
-    };
-
-    fetchRegistrations();
-  }, [attendanceViewOpen, attendanceActivity, activitiesModalProject]);
-
-  useEffect(() => {
-    if (!panelVisible || !panelRef.current || !viewProjectData) {
-      return;
-    }
-
-    const root = panelRef.current;
-    const proposal = (viewProjectData as any).proposalData as Record<string, any> | undefined;
-    if (!proposal) {
-      return;
-    }
-
-    for (const section of proposalSections) {
-      const snapshot = proposal[section.id];
-      if (!snapshot) continue;
-
-      const sectionElement = root.querySelector<HTMLElement>(`[data-section-id="${section.id}"]`);
-      if (!sectionElement) continue;
-
-      if (Array.isArray(snapshot.inputs)) {
-        const nodes = Array.from(sectionElement.querySelectorAll('input, textarea, select')) as Array<
-          HTMLInputElement & HTMLTextAreaElement & HTMLSelectElement
-        >;
-        snapshot.inputs.forEach((saved: any, index: number) => {
-          const el = nodes[index];
-          if (!el) return;
-          const type = (el as HTMLInputElement).type;
-          const isCheckbox = type === 'checkbox';
-
-          if (isCheckbox) {
-            (el as HTMLInputElement).checked = Boolean(saved.checked);
-          } else if ('value' in el && saved.value != null) {
-            (el as any).value = saved.value;
-          }
-        });
-      }
-
-      if (Array.isArray(snapshot.editableCells)) {
-        const cells = Array.from(
-          sectionElement.querySelectorAll<HTMLElement>('[contenteditable="true"]'),
-        );
-        snapshot.editableCells.forEach((value: string, index: number) => {
-          const cell = cells[index];
-          if (!cell) return;
-          cell.innerText = value ?? '';
-        });
-      }
-    }
-  }, [panelVisible, viewProjectData, proposalSections]);
 
   useEffect(() => {
     if (!panelRef.current || !panelVisible) return;
@@ -1837,7 +1954,7 @@ export default function ProjectLeaderProjectsPage() {
             className="relative flex h-full w-full flex-col bg-white shadow-2xl"
             style={{
               transform: panelVisible ? 'translateX(0%)' : 'translateX(100%)',
-              transition: `transform ${transitionMs}ms cubic-bezier(0.22, 0.61, 0.36, 1)` ,
+              transition: `transform ${transitionMs}ms cubic-bezier(0.22, 0.61, 0.36, 1)`,
               willChange: 'transform',
             }}
           >
@@ -2014,15 +2131,47 @@ export default function ProjectLeaderProjectsPage() {
                       activitiesModalProject._id === highlightedProjectActivity.projectId &&
                       activity.title === highlightedProjectActivity.activityTitle;
 
+                    const scheduleKey = `${activitiesModalProject._id}:${activity.activityId}`;
+                    const draft = activityScheduleDrafts[scheduleKey];
+                    const startValue = draft?.startAt ?? toDateTimeLocalValue(activity.startAt);
+                    const endValue = draft?.endAt ?? toDateTimeLocalValue(activity.endAt);
+
+                    const hasStart = !!startValue;
+                    const hasEnd = !!endValue;
+
+                    const now = nowMs;
+                    const startDate = activity.startAt ? new Date(activity.startAt) : undefined;
+                    const endDate = activity.endAt ? new Date(activity.endAt) : undefined;
+
+                    const hasValidStart =
+                      !!startDate && !Number.isNaN(startDate.getTime());
+                    const hasValidEnd =
+                      !!endDate && !Number.isNaN(endDate.getTime());
+
+                    const isExpired = hasValidEnd && endDate!.getTime() < now;
+                    const isOngoing =
+                      hasValidStart && hasValidEnd && startDate!.getTime() <= now && now <= endDate!.getTime();
+                    const isUpcoming =
+                      hasValidStart && !isOngoing && !isExpired && startDate!.getTime() > now;
+
                     return (
                       <div
                         key={`${activity.title}-${index}`}
-                        onClick={() => openAttendanceView(activity)}
+                        onClick={() => {
+                          openAttendanceView(activity);
+                        }}
                         className={`cursor-pointer rounded-xl border border-yellow-100 bg-yellow-50/40 px-3 py-2 text-left transition hover:-translate-y-0.5 hover:shadow-md ${
                           isHighlighted ? 'ring-2 ring-yellow-400 animate-pulse' : ''
-                        }`}
+                        } ${isExpired ? 'opacity-60' : ''}`}
                       >
-                        <p className="text-sm font-semibold text-gray-900">{activity.title}</p>
+                        <p className="flex items-center gap-2 text-sm font-semibold text-gray-900">
+                          <span>{activity.title}</span>
+                          {isHighlighted && (
+                            <span className="inline-flex items-center rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-700 animate-pulse">
+                              New
+                            </span>
+                          )}
+                        </p>
                         <div className="mt-1 flex flex-wrap gap-3 text-[11px] text-gray-700">
                           {activity.hours && (
                             <span className="rounded-full bg-white px-2 py-0.5 font-medium text-yellow-700">
@@ -2032,6 +2181,45 @@ export default function ProjectLeaderProjectsPage() {
                           {activity.resourcePerson && (
                             <span className="rounded-full bg-white px-2 py-0.5 font-medium text-gray-700">
                               Resource: {activity.resourcePerson}
+                            </span>
+                          )}
+                          {(hasStart || hasEnd) && (
+                            <span className="rounded-full bg-white px-2 py-0.5 font-medium text-gray-700">
+                              {hasStart && (
+                                <>
+                                  Start:{' '}
+                                  {new Date(startValue).toLocaleString('en-PH', {
+                                    dateStyle: 'medium',
+                                    timeStyle: 'short',
+                                  })}
+                                </>
+                              )}
+                              {hasEnd && (
+                                <>
+                                  {hasStart ? ' · ' : ''}
+                                  End:{' '}
+                                  {new Date(endValue).toLocaleString('en-PH', {
+                                    dateStyle: 'medium',
+                                    timeStyle: 'short',
+                                  })}
+                                </>
+                              )}
+                              {isExpired && ' · Expired'}
+                            </span>
+                          )}
+                          {isUpcoming && (
+                            <span className="inline-flex items-center rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-[10px] font-semibold text-blue-600">
+                              Upcoming
+                            </span>
+                          )}
+                          {isOngoing && (
+                            <span className="inline-flex items-center rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold text-emerald-600">
+                              Ongoing
+                            </span>
+                          )}
+                          {isExpired && (
+                            <span className="inline-flex items-center rounded-full border border-red-200 bg-red-50 px-2 py-0.5 text-[10px] font-semibold text-red-600">
+                              Ended
                             </span>
                           )}
                         </div>
@@ -2068,12 +2256,148 @@ export default function ProjectLeaderProjectsPage() {
             </div>
 
             <div className="flex-1 overflow-y-auto px-6 py-5 text-xs text-gray-800">
-              <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+              <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
                 <div className="space-y-1">
                   <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">Summary</p>
                   <p className="text-xs text-gray-700">
                     Use this view to track which beneficiaries attended this activity once they register and are approved.
                   </p>
+                </div>
+                <div className="flex flex-1 flex-col items-stretch gap-1 text-[11px] md:flex-none md:items-end">
+                  {activitiesModalProject && (
+                    (() => {
+                      const scheduleKey = `${activitiesModalProject._id}:${attendanceActivity.activityId}`;
+                      const draft = activityScheduleDrafts[scheduleKey];
+                      const startValue = draft?.startAt ?? toDateTimeLocalValue(attendanceActivity.startAt);
+                      const endValue = draft?.endAt ?? toDateTimeLocalValue(attendanceActivity.endAt);
+
+                      const hasStart = !!startValue;
+                      const hasEnd = !!endValue;
+
+                      const now = nowMs;
+                      const startDate = attendanceActivity.startAt
+                        ? new Date(attendanceActivity.startAt)
+                        : undefined;
+                      const endDate = attendanceActivity.endAt
+                        ? new Date(attendanceActivity.endAt)
+                        : undefined;
+
+                      const hasValidStart = !!startDate && !Number.isNaN(startDate.getTime());
+                      const hasValidEnd = !!endDate && !Number.isNaN(endDate.getTime());
+
+                      const isExpired = hasValidEnd && endDate!.getTime() < now;
+                      const isOngoing =
+                        hasValidStart && hasValidEnd && startDate!.getTime() <= now && now <= endDate!.getTime();
+                      const isUpcoming = hasValidStart && !isOngoing && !isExpired && startDate!.getTime() > now;
+
+                      return (
+                        <>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="text-[11px] font-semibold text-gray-600">Schedule:</span>
+                            <div className="flex flex-wrap items-center gap-2">
+                              <label className="flex items-center gap-1">
+                                <span className="text-gray-600">Start</span>
+                                <input
+                                  type="datetime-local"
+                                  value={startValue}
+                                  onChange={(e) => {
+                                    const value = e.target.value;
+                                    setActivityScheduleDrafts((prev) => ({
+                                      ...prev,
+                                      [scheduleKey]: {
+                                        startAt: value,
+                                        endAt: prev[scheduleKey]?.endAt ?? (endValue || ''),
+                                      },
+                                    }));
+                                  }}
+                                  className="rounded border border-yellow-200 px-2 py-1 text-[11px] text-gray-800 focus:border-yellow-400 focus:outline-none focus:ring-1 focus:ring-yellow-300"
+                                />
+                              </label>
+                              <label className="flex items-center gap-1">
+                                <span className="text-gray-600">End</span>
+                                <input
+                                  type="datetime-local"
+                                  value={endValue}
+                                  onChange={(e) => {
+                                    const value = e.target.value;
+                                    setActivityScheduleDrafts((prev) => ({
+                                      ...prev,
+                                      [scheduleKey]: {
+                                        startAt: prev[scheduleKey]?.startAt ?? (startValue || ''),
+                                        endAt: value,
+                                      },
+                                    }));
+                                  }}
+                                  className="rounded border border-yellow-200 px-2 py-1 text-[11px] text-gray-800 focus:border-yellow-400 focus:outline-none focus:ring-1 focus:ring-yellow-300"
+                                />
+                              </label>
+                              <button
+                                type="button"
+                                disabled={activityScheduleSavingKey === scheduleKey}
+                                onClick={() =>
+                                  handleSaveActivitySchedule(
+                                    activitiesModalProject._id,
+                                    attendanceActivity,
+                                    startValue,
+                                    endValue,
+                                  )
+                                }
+                                className="rounded-full border border-yellow-300 px-3 py-1 text-[11px] font-semibold text-yellow-700 hover:bg-yellow-50 disabled:cursor-not-allowed disabled:opacity-60"
+                              >
+                                {activityScheduleSavingKey === scheduleKey ? 'Saving…' : 'Save schedule'}
+                              </button>
+                            </div>
+                          </div>
+                          {activityScheduleError && (
+                            <p className="text-[11px] text-red-600">{activityScheduleError}</p>
+                          )}
+                          {(hasStart || hasEnd) && (
+                            <p className="text-[11px] text-gray-600">
+                              {hasStart && startValue && (
+                                <>
+                                  Start:{' '}
+                                  {new Date(startValue).toLocaleString('en-PH', {
+                                    dateStyle: 'medium',
+                                    timeStyle: 'short',
+                                  })}
+                                </>
+                              )}
+                              {hasEnd && endValue && (
+                                <>
+                                  {hasStart ? ' · ' : ''}
+                                  End:{' '}
+                                  {new Date(endValue).toLocaleString('en-PH', {
+                                    dateStyle: 'medium',
+                                    timeStyle: 'short',
+                                  })}
+                                </>
+                              )}
+                              {isExpired && ' · Expired'}
+                            </p>
+                          )}
+                          {(isUpcoming || isOngoing || isExpired) && (
+                            <p className="mt-1 flex flex-wrap gap-2 text-[11px]">
+                              {isUpcoming && (
+                                <span className="inline-flex items-center rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 font-semibold text-blue-600">
+                                  Upcoming
+                                </span>
+                              )}
+                              {isOngoing && (
+                                <span className="inline-flex items-center rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 font-semibold text-emerald-600">
+                                  Ongoing
+                                </span>
+                              )}
+                              {isExpired && (
+                                <span className="inline-flex items-center rounded-full border border-red-200 bg-red-50 px-2 py-0.5 font-semibold text-red-600">
+                                  Ended
+                                </span>
+                              )}
+                            </p>
+                          )}
+                        </>
+                      );
+                    })()
+                  )}
                 </div>
                 <div className="flex flex-wrap gap-2 text-[11px]">
                   <span className="inline-flex items-center rounded-full border border-yellow-200 bg-yellow-50 px-2 py-0.5 font-semibold text-yellow-700">
@@ -2122,7 +2446,9 @@ export default function ProjectLeaderProjectsPage() {
                                 <button
                                   type="button"
                                   disabled={
-                                    attendanceUpdatingEmail === row.participantEmail || row.status !== 'registered'
+                                    attendanceUpdatingEmail === row.participantEmail ||
+                                    row.status !== 'registered' ||
+                                    !canEditAttendance
                                   }
                                   onClick={() => handleAttendanceUpdate(row.participantEmail, 'present')}
                                   className="rounded-full bg-emerald-500 px-2 py-0.5 text-[10px] font-semibold text-white shadow-sm hover:bg-emerald-600 disabled:cursor-not-allowed disabled:opacity-60"
@@ -2132,7 +2458,9 @@ export default function ProjectLeaderProjectsPage() {
                                 <button
                                   type="button"
                                   disabled={
-                                    attendanceUpdatingEmail === row.participantEmail || row.status !== 'registered'
+                                    attendanceUpdatingEmail === row.participantEmail ||
+                                    row.status !== 'registered' ||
+                                    !canEditAttendance
                                   }
                                   onClick={() => handleAttendanceUpdate(row.participantEmail, 'absent')}
                                   className="rounded-full border border-red-200 px-2 py-0.5 text-[10px] font-semibold text-red-600 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-60"

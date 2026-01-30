@@ -103,11 +103,19 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
             read: item.read,
             projectId: item.project,
           }))
-          .filter(
-            (item) =>
-              item.title !== 'Project approved' &&
-              item.title !== 'Activity join' &&
-              item.title !== 'Join request approved',
+          .filter((item) =>
+            !(
+              item.title === 'Project approved' ||
+              item.title === 'Activity join' ||
+              item.title === 'Join request approved' ||
+              item.title === 'Activity attendance updated' ||
+              item.title === 'Activity Starting Soon' ||
+              item.title === 'Activity Started' ||
+              item.title === 'Activity Ending Soon' ||
+              item.title === 'Activity Ended' ||
+              item.title === 'Activity Evaluation' ||
+              (item.message && item.message.includes('Your attendance for activity'))
+            ),
           );
 
         setNotifications(mapped);
@@ -123,11 +131,31 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
     const socket = io('http://localhost:5000');
     socketRef.current = socket;
 
+    // Identify the currently authenticated admin user for online/offline tracking
+    try {
+      const stored = window.localStorage.getItem(STORAGE_KEY);
+      if (stored) {
+        const parsed = JSON.parse(stored) as StoredUser | null;
+        if (parsed?.id) {
+          socket.emit('identify', { userId: parsed.id });
+        }
+      }
+    } catch {
+      // best-effort only; online indicator will just be missing if this fails
+    }
+
     socket.on('notification:new', (payload: NotificationItem) => {
       if (
         payload.title === 'Project approved' ||
         payload.title === 'Activity join' ||
-        payload.title === 'Join request approved'
+        payload.title === 'Join request approved' ||
+        payload.title === 'Activity attendance updated' ||
+        payload.title === 'Activity Starting Soon' ||
+        payload.title === 'Activity Started' ||
+        payload.title === 'Activity Ending Soon' ||
+        payload.title === 'Activity Ended' ||
+        payload.title === 'Activity Evaluation' ||
+        (payload.message && payload.message.includes('Your attendance for activity'))
       ) {
         return;
       }
@@ -256,7 +284,7 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
   }
 
   return (
-    <div className="flex min-h-screen bg-gradient-to-br from-amber-50 via-white to-white">
+    <div className="flex h-screen overflow-hidden bg-gradient-to-br from-amber-50 via-white to-white">
       {logoutProgress > 0 && (
         <div className="fixed inset-x-0 top-0 z-50">
           <div
@@ -265,9 +293,11 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
           />
         </div>
       )}
-      <Sidebar items={adminNavigation} onLogout={handleLogout} logoutDisabled={isLoggingOut} />
+      <div className="sticky top-0 h-screen">
+        <Sidebar items={adminNavigation} onLogout={handleLogout} logoutDisabled={isLoggingOut} />
+      </div>
 
-      <main className="flex-1">
+      <main className="flex-1 overflow-y-auto">
         <HeaderBar
           onToggleNotifications={handleToggleNotifications}
           notificationsOpen={notificationsOpen}
