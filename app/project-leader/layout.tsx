@@ -31,12 +31,20 @@ export default function ProjectLeaderLayout({ children }: { children: ReactNode 
   const initialNotificationsLoadedRef = useRef(false);
   const socketRef = useRef<Socket | null>(null);
   const [profileOpen, setProfileOpen] = useState(false);
+  const [profileSlideIn, setProfileSlideIn] = useState(false);
+  const [profileOverlayIn, setProfileOverlayIn] = useState(false);
   const [profileLoading, setProfileLoading] = useState(false);
   const [profileSaving, setProfileSaving] = useState(false);
   const [profileError, setProfileError] = useState<string | null>(null);
   const [profileUsername, setProfileUsername] = useState('');
   const [profileEmail, setProfileEmail] = useState('');
   const [profileRoleName, setProfileRoleName] = useState('');
+  const [pwdCurrent, setPwdCurrent] = useState('');
+  const [pwdNew, setPwdNew] = useState('');
+  const [pwdConfirm, setPwdConfirm] = useState('');
+  const [pwdSaving, setPwdSaving] = useState(false);
+  const [pwdError, setPwdError] = useState<string | null>(null);
+  const [pwdSuccess, setPwdSuccess] = useState<string | null>(null);
 
   const handleLogout = useCallback(() => {
     if (isLoggingOut) return;
@@ -105,6 +113,74 @@ export default function ProjectLeaderLayout({ children }: { children: ReactNode 
       setProfileLoading(false);
     }
   }, []);
+
+  useEffect(() => {
+    if (profileOpen) {
+      const id = window.setTimeout(() => {
+        setProfileSlideIn(true);
+        setProfileOverlayIn(true);
+      }, 0);
+      return () => window.clearTimeout(id);
+    } else {
+      setProfileSlideIn(false);
+      setProfileOverlayIn(false);
+    }
+  }, [profileOpen]);
+
+  const closeProfile = useCallback(() => {
+    setProfileSlideIn(false);
+    setProfileOverlayIn(false);
+    window.setTimeout(() => setProfileOpen(false), 300);
+  }, []);
+
+  const handleChangePassword = useCallback(async () => {
+    try {
+      setPwdError(null);
+      setPwdSuccess(null);
+      if (!pwdCurrent || !pwdNew || !pwdConfirm) {
+        setPwdError('Please fill in all password fields.');
+        return;
+      }
+      if (pwdNew !== pwdConfirm) {
+        setPwdError('New password and confirmation do not match.');
+        return;
+      }
+      if (pwdNew.length < 6) {
+        setPwdError('New password must be at least 6 characters.');
+        return;
+      }
+
+      setPwdSaving(true);
+      const stored = window.localStorage.getItem(STORAGE_KEY);
+      const parsed = stored ? (JSON.parse(stored) as StoredUser | null) : null;
+      if (!parsed?.id) {
+        setPwdError('Missing session. Please sign in again.');
+        setPwdSaving(false);
+        return;
+      }
+
+      const res = await fetch(`http://localhost:5000/api/auth/users/${encodeURIComponent(parsed.id)}/password`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ currentPassword: pwdCurrent, newPassword: pwdNew }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setPwdError(data.message || 'Failed to change password.');
+        setPwdSaving(false);
+        return;
+      }
+
+      setPwdSuccess('Password updated successfully.');
+      setPwdCurrent('');
+      setPwdNew('');
+      setPwdConfirm('');
+    } catch (e) {
+      setPwdError('Failed to change password. Please try again.');
+    } finally {
+      setPwdSaving(false);
+    }
+  }, [pwdCurrent, pwdNew, pwdConfirm]);
 
   const handleSaveProfile = useCallback(async () => {
     try {
@@ -443,8 +519,16 @@ export default function ProjectLeaderLayout({ children }: { children: ReactNode 
       )}
 
       {profileOpen && (
-        <div className="fixed inset-0 z-60 flex items-center justify-center bg-black/40 px-4" role="dialog" aria-modal="true">
-          <div className="w-full max-w-md rounded-2xl border border-yellow-100 bg-white p-6 text-sm text-gray-800 shadow-2xl">
+        <div className="fixed inset-0 z-60" role="dialog" aria-modal="true">
+          <div
+            className={`absolute inset-0 bg-black/40 transition-opacity duration-300 ${profileOverlayIn ? 'opacity-100' : 'opacity-0'}`}
+            onClick={closeProfile}
+          />
+          <div
+            className={`absolute right-0 top-0 h-full w-full max-w-md border-l border-yellow-100 bg-white p-6 text-sm text-gray-800 shadow-2xl transition-transform duration-300 ease-out ${
+              profileSlideIn ? 'translate-x-0' : 'translate-x-full'
+            }`}
+          >
             <div className="mb-4 flex items-start justify-between gap-3">
               <div>
                 <p className="text-xs font-semibold uppercase tracking-wide text-yellow-500">My profile</p>
@@ -455,7 +539,7 @@ export default function ProjectLeaderLayout({ children }: { children: ReactNode 
               </div>
               <button
                 type="button"
-                onClick={() => setProfileOpen(false)}
+                onClick={closeProfile}
                 className="rounded-full border border-yellow-200 px-3 py-1 text-xs font-semibold text-yellow-700 hover:bg-yellow-50"
               >
                 Close
@@ -517,6 +601,59 @@ export default function ProjectLeaderLayout({ children }: { children: ReactNode 
                 </div>
               </div>
             )}
+
+            <div className="mt-6 border-t border-gray-100 pt-4">
+              <h4 className="text-sm font-semibold text-gray-900">Change password</h4>
+              <div className="mt-3 grid grid-cols-1 gap-3 text-xs">
+                <div className="space-y-1">
+                  <label htmlFor="pl-current-password" className="font-medium text-gray-800">Current password</label>
+                  <input
+                    id="pl-current-password"
+                    type="password"
+                    value={pwdCurrent}
+                    onChange={(e) => setPwdCurrent(e.target.value)}
+                    className="w-full rounded-lg border border-gray-200 px-3 py-1.5 text-[11px] text-gray-800 focus:border-yellow-400 focus:outline-none focus:ring-2 focus:ring-yellow-200"
+                    placeholder="Enter current password"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label htmlFor="pl-new-password" className="font-medium text-gray-800">New password</label>
+                  <input
+                    id="pl-new-password"
+                    type="password"
+                    value={pwdNew}
+                    onChange={(e) => setPwdNew(e.target.value)}
+                    className="w-full rounded-lg border border-gray-200 px-3 py-1.5 text-[11px] text-gray-800 focus:border-yellow-400 focus:outline-none focus:ring-2 focus:ring-yellow-200"
+                    placeholder="Enter new password"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label htmlFor="pl-confirm-password" className="font-medium text-gray-800">Confirm new password</label>
+                  <input
+                    id="pl-confirm-password"
+                    type="password"
+                    value={pwdConfirm}
+                    onChange={(e) => setPwdConfirm(e.target.value)}
+                    className="w-full rounded-lg border border-gray-200 px-3 py-1.5 text-[11px] text-gray-800 focus:border-yellow-400 focus:outline-none focus:ring-2 focus:ring-yellow-200"
+                    placeholder="Re-enter new password"
+                  />
+                </div>
+
+                {pwdError && <p className="text-[11px] font-medium text-red-600">{pwdError}</p>}
+                {pwdSuccess && <p className="text-[11px] font-medium text-emerald-600">{pwdSuccess}</p>}
+
+                <div className="mt-1 flex items-center justify-end gap-2 text-xs">
+                  <button
+                    type="button"
+                    onClick={handleChangePassword}
+                    className="rounded-full bg-yellow-500 px-4 py-1.5 font-semibold text-white shadow hover:bg-yellow-600 disabled:cursor-not-allowed disabled:opacity-60"
+                    disabled={pwdSaving}
+                  >
+                    {pwdSaving ? 'Updating…' : 'Update password'}
+                  </button>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       )}

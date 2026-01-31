@@ -7,6 +7,7 @@ import authRoutes from './routes/auth';
 import projectRoutes from './routes/project';
 import notificationRoutes from './routes/notification';
 import { initSocket } from './socket';
+import metricsRoutes from './routes/metrics';
 
 dotenv.config();
 
@@ -20,6 +21,7 @@ app.use(express.json({ limit: '5mb' }));
 app.use('/api/auth', authRoutes);
 app.use('/api/projects', projectRoutes);
 app.use('/api/notifications', notificationRoutes);
+app.use('/api/metrics', metricsRoutes);
 
 const uri = process.env.MONGO_URI;
 

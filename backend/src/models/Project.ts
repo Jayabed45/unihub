@@ -55,6 +55,6 @@ const ProjectSchema: Schema = new Schema({
     default: 'Pending',
     required: true,
   },
-});
+}, { timestamps: true });
 
 export default mongoose.model<IProject>('Project', ProjectSchema);
