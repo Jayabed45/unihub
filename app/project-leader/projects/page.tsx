@@ -77,6 +77,7 @@ interface ProjectActivity {
   resourcePerson?: string;
   startAt?: string | null;
   endAt?: string | null;
+  location?: string | null;
 }
 
 export default function ProjectLeaderProjectsPage() {
@@ -115,6 +116,12 @@ export default function ProjectLeaderProjectsPage() {
   const [activitiesModalOpen, setActivitiesModalOpen] = useState(false);
   const [activitiesModalProject, setActivitiesModalProject] = useState<LeaderProject | null>(null);
   const [activitiesForModal, setActivitiesForModal] = useState<ProjectActivity[]>([]);
+  const [extensionModalOpen, setExtensionModalOpen] = useState(false);
+  const [extensionRows, setExtensionRows] = useState<
+    Array<{ topic: string; hours: string; resourcePerson: string }>
+  >([{ topic: '', hours: '', resourcePerson: '' }]);
+  const [extensionSaving, setExtensionSaving] = useState(false);
+  const [extensionError, setExtensionError] = useState<string | null>(null);
   const [attendanceViewOpen, setAttendanceViewOpen] = useState(false);
   const [attendanceActivity, setAttendanceActivity] = useState<ProjectActivity | null>(null);
   const [attendanceRows, setAttendanceRows] = useState<
@@ -132,7 +139,7 @@ export default function ProjectLeaderProjectsPage() {
     | null
   >(null);
   const [activityScheduleDrafts, setActivityScheduleDrafts] = useState<
-    Record<string, { startAt: string; endAt: string }>
+    Record<string, { startAt: string; endAt: string; location: string }>
   >({});
   const [activityScheduleSavingKey, setActivityScheduleSavingKey] = useState<string | null>(null);
   const [activityScheduleError, setActivityScheduleError] = useState<string | null>(null);
@@ -1158,15 +1165,15 @@ export default function ProjectLeaderProjectsPage() {
 
     let parsed: ProjectActivity[] = [];
 
-    const schedule: Array<{ activityId: number; startAt?: string; endAt?: string }> = Array.isArray(
-      (project as any).activitySchedule,
-    )
-      ? ((project as any).activitySchedule as any[]).map((item) => ({
-          activityId: Number(item.activityId),
-          startAt: item.startAt as string | undefined,
-          endAt: item.endAt as string | undefined,
-        }))
-      : [];
+    const schedule: Array<{ activityId: number; startAt?: string; endAt?: string; location?: string | null }> =
+      Array.isArray((project as any).activitySchedule)
+        ? ((project as any).activitySchedule as any[]).map((item) => ({
+            activityId: Number(item.activityId),
+            startAt: item.startAt as string | undefined,
+            endAt: item.endAt as string | undefined,
+            location: typeof item.location === 'string' ? item.location : undefined,
+          }))
+        : [];
 
     if (trainingSnapshot && Array.isArray(trainingSnapshot.editableCells)) {
       const cells: string[] = trainingSnapshot.editableCells;
@@ -1191,10 +1198,55 @@ export default function ProjectLeaderProjectsPage() {
           resourcePerson: resourcePerson || undefined,
           startAt: scheduleEntry?.startAt ?? null,
           endAt: scheduleEntry?.endAt ?? null,
+          location: scheduleEntry?.location ?? null,
         });
 
         activityIndexCounter += 1;
       }
+    }
+
+    // Append any saved extension activities as additional entries
+    try {
+      const existingExt: Array<{ topic?: string; hours?: number | null; resourcePerson?: string }> =
+        Array.isArray(fullProject.extensionActivities) ? fullProject.extensionActivities : [];
+
+      if (existingExt.length > 0) {
+        let nextActivityId = parsed.length
+          ? parsed.reduce((max, item) => (item.activityId > max ? item.activityId : max), parsed[0].activityId) + 1
+          : 0;
+
+        existingExt.forEach((item, index) => {
+          const rawTopic = typeof item.topic === 'string' ? item.topic.trim() : '';
+          const title = rawTopic || `Extension activity ${index + 1}`;
+
+          if (!title) return;
+
+          const numericHours =
+            typeof item.hours === 'number' && Number.isFinite(item.hours) && item.hours >= 0
+              ? String(item.hours)
+              : undefined;
+          const resourcePerson =
+            typeof item.resourcePerson === 'string' && item.resourcePerson.trim()
+              ? item.resourcePerson.trim()
+              : undefined;
+
+          const scheduleEntry = schedule.find((entry) => entry.activityId === nextActivityId);
+
+          parsed.push({
+            activityId: nextActivityId,
+            title,
+            hours: numericHours,
+            resourcePerson,
+            startAt: scheduleEntry?.startAt ?? null,
+            endAt: scheduleEntry?.endAt ?? null,
+            location: scheduleEntry?.location ?? null,
+          });
+
+          nextActivityId += 1;
+        });
+      }
+    } catch {
+      // ignore extension parsing errors
     }
 
     if (highlightedProjectActivity && highlightedProjectActivity.projectId === project._id) {
@@ -1211,11 +1263,122 @@ export default function ProjectLeaderProjectsPage() {
     setActivitiesModalOpen(true);
   };
 
+  const openExtensionActivitiesModal = () => {
+    if (!activitiesModalProject) return;
+
+    try {
+      const fullProject = activitiesModalProject as any;
+      const existing: Array<{ topic?: string; hours?: number | null; resourcePerson?: string }> =
+        Array.isArray(fullProject.extensionActivities) ? fullProject.extensionActivities : [];
+
+      if (existing.length > 0) {
+        const mapped = existing.map((item) => ({
+          topic: (item.topic || '').trim(),
+          hours:
+            typeof item.hours === 'number' && Number.isFinite(item.hours) && item.hours >= 0
+              ? String(item.hours)
+              : '',
+          resourcePerson: (item.resourcePerson || '').trim(),
+        }));
+
+        // Always provide one extra empty row so project leaders can add a new
+        // extension activity without overwriting existing ones.
+        setExtensionRows([...mapped, { topic: '', hours: '', resourcePerson: '' }]);
+      } else {
+        setExtensionRows([{ topic: '', hours: '', resourcePerson: '' }]);
+      }
+    } catch {
+      setExtensionRows([{ topic: '', hours: '', resourcePerson: '' }]);
+    }
+
+    setExtensionError(null);
+    setExtensionModalOpen(true);
+  };
+
+  const handleSaveExtensionActivities = async () => {
+    if (!activitiesModalProject) return;
+
+    const projectId = activitiesModalProject._id;
+
+    const payloadActivities = extensionRows
+      .map((row) => ({
+        topic: row.topic.trim(),
+        hours: row.hours.trim(),
+        resourcePerson: row.resourcePerson.trim(),
+      }))
+      .filter((row) => row.topic || row.hours || row.resourcePerson);
+
+    setExtensionSaving(true);
+    setExtensionError(null);
+
+    try {
+      const res = await fetch(`http://localhost:5000/api/projects/${encodeURIComponent(projectId)}/extension-activities`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ activities: payloadActivities }),
+      });
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error((data as any).message || 'Failed to save extension activities');
+      }
+
+      const data = (await res.json()) as {
+        projectId: string;
+        activities: Array<{ topic: string; hours: number | null; resourcePerson: string }>;
+      };
+
+      setExtensionRows(
+        data.activities.length
+          ? data.activities.map((item) => ({
+              topic: item.topic || '',
+              hours:
+                typeof item.hours === 'number' && Number.isFinite(item.hours) && item.hours >= 0
+                  ? String(item.hours)
+                  : '',
+              resourcePerson: item.resourcePerson || '',
+            }))
+          : [{ topic: '', hours: '', resourcePerson: '' }],
+      );
+
+      setProjects((prev) =>
+        prev.map((proj) =>
+          proj._id === data.projectId
+            ? ({
+                ...(proj as any),
+                extensionActivities: data.activities,
+              } as any)
+            : proj,
+        ),
+      );
+
+      // Refresh the visible activity list so extension activities appear immediately
+      const updatedProject =
+        activitiesModalProject && activitiesModalProject._id === data.projectId
+          ? ({ ...(activitiesModalProject as any), extensionActivities: data.activities } as LeaderProject)
+          : null;
+
+      if (updatedProject) {
+        setActivitiesModalProject(updatedProject);
+        openActivitiesModal(updatedProject);
+      }
+
+      setExtensionModalOpen(false);
+    } catch (err: any) {
+      setExtensionError(err.message || 'Failed to save extension activities');
+    } finally {
+      setExtensionSaving(false);
+    }
+  };
+
   const handleSaveActivitySchedule = async (
     projectId: string,
     activity: ProjectActivity,
     startValue: string,
     endValue: string,
+    locationValue: string,
   ) => {
     if (!projectId) return;
 
@@ -1227,6 +1390,7 @@ export default function ProjectLeaderProjectsPage() {
       const body: Record<string, string> = {};
       if (startValue) body.startAt = startValue;
       if (endValue) body.endAt = endValue;
+      body.location = locationValue ?? '';
 
       const res = await fetch(
         `http://localhost:5000/api/projects/${projectId}/activities/${activity.activityId}/schedule`,
@@ -1248,19 +1412,20 @@ export default function ProjectLeaderProjectsPage() {
         activityId: number;
         startAt?: string | null;
         endAt?: string | null;
+        location?: string | null;
       };
 
       setActivitiesForModal((prev) =>
         prev.map((item) =>
           item.activityId === data.activityId
-            ? { ...item, startAt: data.startAt ?? null, endAt: data.endAt ?? null }
+            ? { ...item, startAt: data.startAt ?? null, endAt: data.endAt ?? null, location: data.location ?? null }
             : item,
         ),
       );
 
       setAttendanceActivity((prev) =>
         prev && prev.activityId === data.activityId
-          ? { ...prev, startAt: data.startAt ?? null, endAt: data.endAt ?? null }
+          ? { ...prev, startAt: data.startAt ?? null, endAt: data.endAt ?? null, location: data.location ?? null }
           : prev,
       );
 
@@ -2091,6 +2256,154 @@ export default function ProjectLeaderProjectsPage() {
         </div>
       )}
 
+      {extensionModalOpen && activitiesModalProject && (
+        <div
+          className="fixed inset-0 z-50 flex bg-black/40 backdrop-blur-sm"
+          role="dialog"
+          aria-modal="true"
+        >
+          <div className="mx-auto my-8 flex h-[calc(100%-4rem)] w-full max-w-5xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
+            <div className="flex items-center justify-between border-b border-yellow-100 px-6 py-4">
+              <div className="space-y-1">
+                <p className="text-xs font-semibold uppercase tracking-wide text-yellow-500">Extension Activities</p>
+                <h2 className="text-sm font-semibold text-gray-900 line-clamp-1">{activitiesModalProject.name}</h2>
+                <p className="text-[11px] text-gray-500">
+                  Define additional competencies/topics, hours, and resource persons for extended activities.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setExtensionModalOpen(false)}
+                className="rounded-full border border-yellow-200 px-3 py-1 text-xs font-semibold text-yellow-700 hover:bg-yellow-50"
+              >
+                Close
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto px-6 py-5 text-xs text-gray-800">
+              {extensionError && (
+                <div className="mb-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-[11px] text-red-700">
+                  {extensionError}
+                </div>
+              )}
+
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[800px] border border-yellow-200 text-sm text-gray-700">
+                  <thead>
+                    <tr className="bg-yellow-50">
+                      <th className="border border-yellow-200 px-3 py-2 text-left text-xs font-semibold text-gray-800">
+                        Competencies / Topics
+                      </th>
+                      <th className="border border-yellow-200 px-3 py-2 text-left text-xs font-semibold text-gray-800 w-32">
+                        Number of Hours
+                      </th>
+                      <th className="border border-yellow-200 px-3 py-2 text-left text-xs font-semibold text-gray-800">
+                        Resource Person
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {extensionRows.map((row, index) => (
+                      <tr key={`extension-row-${index}`}>
+                        <td className="border border-yellow-200 px-3 py-2 align-top">
+                          <textarea
+                            className="h-16 w-full resize-y rounded border border-yellow-200 px-2 py-1 text-xs text-gray-800 focus:border-yellow-400 focus:outline-none focus:ring-1 focus:ring-yellow-300"
+                            value={row.topic}
+                            onChange={(e) => {
+                              const value = e.target.value;
+                              setExtensionRows((prev) => {
+                                const next = [...prev];
+                                next[index] = { ...next[index], topic: value };
+                                return next;
+                              });
+                            }}
+                          />
+                        </td>
+                        <td className="border border-yellow-200 px-3 py-2 align-top">
+                          <input
+                            type="number"
+                            min="0"
+                            step="0.5"
+                            className="h-9 w-full rounded border border-yellow-200 px-2 text-xs text-gray-800 focus:border-yellow-400 focus:outline-none focus:ring-1 focus:ring-yellow-300"
+                            value={row.hours}
+                            onChange={(e) => {
+                              const value = e.target.value;
+                              setExtensionRows((prev) => {
+                                const next = [...prev];
+                                next[index] = { ...next[index], hours: value };
+                                return next;
+                              });
+                            }}
+                          />
+                        </td>
+                        <td className="border border-yellow-200 px-3 py-2 align-top">
+                          <input
+                            type="text"
+                            className="h-9 w-full rounded border border-yellow-200 px-2 text-xs text-gray-800 focus:border-yellow-400 focus:outline-none focus:ring-1 focus:ring-yellow-300"
+                            value={row.resourcePerson}
+                            onChange={(e) => {
+                              const value = e.target.value;
+                              setExtensionRows((prev) => {
+                                const next = [...prev];
+                                next[index] = { ...next[index], resourcePerson: value };
+                                return next;
+                              });
+                            }}
+                          />
+                        </td>
+                      </tr>
+                    ))}
+                    <tr>
+                      <td className="border border-yellow-200 px-3 py-2 text-right text-xs font-semibold text-gray-800">
+                        Total Hours
+                      </td>
+                      <td className="border border-yellow-200 px-3 py-2 text-sm font-semibold text-gray-900">
+                        {extensionRows
+                          .map((row) => Number.parseFloat(row.hours || '0'))
+                          .filter((value) => Number.isFinite(value) && value >= 0)
+                          .reduce((sum, value) => sum + value, 0)}
+                      </td>
+                      <td className="border border-yellow-200 px-3 py-2" />
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="mt-4 flex justify-between text-xs">
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setExtensionRows((prev) => [...prev, { topic: '', hours: '', resourcePerson: '' }])
+                    }
+                    className="rounded-full border border-yellow-200 px-3 py-1 font-semibold text-yellow-700 transition hover:bg-yellow-50"
+                  >
+                    Add row
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setExtensionRows((prev) => (prev.length > 1 ? prev.slice(0, -1) : prev))
+                    }
+                    className="rounded-full border border-yellow-200 px-3 py-1 font-semibold text-yellow-700 transition hover:bg-yellow-50"
+                  >
+                    Delete row
+                  </button>
+                </div>
+                <button
+                  type="button"
+                  disabled={extensionSaving}
+                  onClick={handleSaveExtensionActivities}
+                  className="rounded-full border border-emerald-300 bg-emerald-50 px-4 py-1 text-xs font-semibold text-emerald-700 hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {extensionSaving ? 'Saving…' : 'Save activities'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {activitiesModalOpen && activitiesModalProject && (
         <div
           className="fixed inset-0 z-40 flex bg-black/40 backdrop-blur-sm"
@@ -2109,13 +2422,22 @@ export default function ProjectLeaderProjectsPage() {
                 <p className="text-xs font-semibold uppercase tracking-wide text-yellow-500">Project Activities</p>
                 <h3 className="text-sm font-semibold text-gray-900 line-clamp-1">{activitiesModalProject.name}</h3>
               </div>
-              <button
-                type="button"
-                onClick={() => setActivitiesModalOpen(false)}
-                className="rounded-full border border-yellow-200 px-3 py-1 text-xs font-semibold text-yellow-700 hover:bg-yellow-50"
-              >
-                Close
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={openExtensionActivitiesModal}
+                  className="rounded-full border border-yellow-200 px-3 py-1 text-xs font-semibold text-yellow-700 hover:bg-yellow-50"
+                >
+                  Add / extend activities
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setActivitiesModalOpen(false)}
+                  className="rounded-full border border-yellow-200 px-3 py-1 text-xs font-semibold text-yellow-700 hover:bg-yellow-50"
+                >
+                  Close
+                </button>
+              </div>
             </div>
 
             <div className="flex-1 overflow-y-auto px-6 py-5 text-xs text-gray-800">
@@ -2173,11 +2495,6 @@ export default function ProjectLeaderProjectsPage() {
                           )}
                         </p>
                         <div className="mt-1 flex flex-wrap gap-3 text-[11px] text-gray-700">
-                          {activity.hours && (
-                            <span className="rounded-full bg-white px-2 py-0.5 font-medium text-yellow-700">
-                              {activity.hours} hrs
-                            </span>
-                          )}
                           {activity.resourcePerson && (
                             <span className="rounded-full bg-white px-2 py-0.5 font-medium text-gray-700">
                               Resource: {activity.resourcePerson}
@@ -2270,6 +2587,8 @@ export default function ProjectLeaderProjectsPage() {
                       const draft = activityScheduleDrafts[scheduleKey];
                       const startValue = draft?.startAt ?? toDateTimeLocalValue(attendanceActivity.startAt);
                       const endValue = draft?.endAt ?? toDateTimeLocalValue(attendanceActivity.endAt);
+                      const locationValue =
+                        draft?.location ?? (typeof attendanceActivity.location === 'string' ? attendanceActivity.location : '');
 
                       const hasStart = !!startValue;
                       const hasEnd = !!endValue;
@@ -2293,7 +2612,7 @@ export default function ProjectLeaderProjectsPage() {
                       return (
                         <>
                           <div className="flex flex-wrap items-center gap-2">
-                            <span className="text-[11px] font-semibold text-gray-600">Schedule:</span>
+                            <span className="text-[11px] font-semibold text-gray-600">Schedule & location:</span>
                             <div className="flex flex-wrap items-center gap-2">
                               <label className="flex items-center gap-1">
                                 <span className="text-gray-600">Start</span>
@@ -2307,6 +2626,7 @@ export default function ProjectLeaderProjectsPage() {
                                       [scheduleKey]: {
                                         startAt: value,
                                         endAt: prev[scheduleKey]?.endAt ?? (endValue || ''),
+                                        location: prev[scheduleKey]?.location ?? locationValue,
                                       },
                                     }));
                                   }}
@@ -2325,10 +2645,31 @@ export default function ProjectLeaderProjectsPage() {
                                       [scheduleKey]: {
                                         startAt: prev[scheduleKey]?.startAt ?? (startValue || ''),
                                         endAt: value,
+                                        location: prev[scheduleKey]?.location ?? locationValue,
                                       },
                                     }));
                                   }}
                                   className="rounded border border-yellow-200 px-2 py-1 text-[11px] text-gray-800 focus:border-yellow-400 focus:outline-none focus:ring-1 focus:ring-yellow-300"
+                                />
+                              </label>
+                              <label className="flex items-center gap-1">
+                                <span className="text-gray-600">Location</span>
+                                <input
+                                  type="text"
+                                  value={locationValue}
+                                  onChange={(e) => {
+                                    const value = e.target.value;
+                                    setActivityScheduleDrafts((prev) => ({
+                                      ...prev,
+                                      [scheduleKey]: {
+                                        startAt: prev[scheduleKey]?.startAt ?? (startValue || ''),
+                                        endAt: prev[scheduleKey]?.endAt ?? (endValue || ''),
+                                        location: value,
+                                      },
+                                    }));
+                                  }}
+                                  className="w-40 rounded border border-yellow-200 px-2 py-1 text-[11px] text-gray-800 focus:border-yellow-400 focus:outline-none focus:ring-1 focus:ring-yellow-300"
+                                  placeholder="e.g. AVR, Room 101"
                                 />
                               </label>
                               <button
@@ -2340,6 +2681,7 @@ export default function ProjectLeaderProjectsPage() {
                                     attendanceActivity,
                                     startValue,
                                     endValue,
+                                    locationValue,
                                   )
                                 }
                                 className="rounded-full border border-yellow-300 px-3 py-1 text-[11px] font-semibold text-yellow-700 hover:bg-yellow-50 disabled:cursor-not-allowed disabled:opacity-60"
@@ -2351,7 +2693,7 @@ export default function ProjectLeaderProjectsPage() {
                           {activityScheduleError && (
                             <p className="text-[11px] text-red-600">{activityScheduleError}</p>
                           )}
-                          {(hasStart || hasEnd) && (
+                          {(hasStart || hasEnd || (attendanceActivity.location && attendanceActivity.location.trim())) && (
                             <p className="text-[11px] text-gray-600">
                               {hasStart && startValue && (
                                 <>
@@ -2370,6 +2712,12 @@ export default function ProjectLeaderProjectsPage() {
                                     dateStyle: 'medium',
                                     timeStyle: 'short',
                                   })}
+                                </>
+                              )}
+                              {attendanceActivity.location && attendanceActivity.location.trim() && (
+                                <>
+                                  {(hasStart || hasEnd) ? ' · ' : ''}
+                                  Location: {attendanceActivity.location.trim()}
                                 </>
                               )}
                               {isExpired && ' · Expired'}
@@ -2399,15 +2747,10 @@ export default function ProjectLeaderProjectsPage() {
                     })()
                   )}
                 </div>
-                <div className="flex flex-wrap gap-2 text-[11px]">
+                <div className="flex flex-wrap items-center gap-2 text-[11px] text-gray-700">
                   <span className="inline-flex items-center rounded-full border border-yellow-200 bg-yellow-50 px-2 py-0.5 font-semibold text-yellow-700">
-                    Planned resource: {attendanceActivity.resourcePerson || '—'}
+                    Planned resource: {attendanceActivity.resourcePerson || 'N/A'}
                   </span>
-                  {attendanceActivity.hours && (
-                    <span className="inline-flex items-center rounded-full border border-yellow-200 bg-white px-2 py-0.5 font-semibold text-yellow-700">
-                      {attendanceActivity.hours} hrs
-                    </span>
-                  )}
                 </div>
               </div>
 

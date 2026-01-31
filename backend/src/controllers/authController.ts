@@ -134,13 +134,93 @@ export const login = async (req: Request, res: Response) => {
   }
 };
 
-export const getAllUsers = async (req: Request, res: Response) => {
+export const getAllUsers = async (_req: Request, res: Response) => {
   try {
     const users = await User.find().populate('role', 'name').select('-passwordHash');
     res.json(users);
   } catch (err: any) {
     console.error('Error in getAllUsers controller:', err);
     res.status(500).send('Server error');
+  }
+};
+
+export const getUserById = async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    if (!id) {
+      return res.status(400).json({ message: 'User id is required' });
+    }
+
+    const user = await User.findById(id).populate('role', 'name').select('-passwordHash');
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    return res.json(user);
+  } catch (err: any) {
+    console.error('Error in getUserById controller:', err);
+    return res.status(500).json({ message: 'Server error' });
+  }
+};
+
+export const updateUserBasic = async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    if (!id) {
+      return res.status(400).json({ message: 'User id is required' });
+    }
+
+    const { username, email } = req.body as { username?: string; email?: string };
+
+    if (!username && !email) {
+      return res.status(400).json({ message: 'Nothing to update' });
+    }
+
+    const updates: { username?: string; email?: string } = {};
+    if (typeof username === 'string' && username.trim()) {
+      updates.username = username.trim();
+    }
+    if (typeof email === 'string' && email.trim()) {
+      updates.email = email.trim().toLowerCase();
+    }
+
+    const user = await User.findById(id);
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    // Check for unique email/username conflicts
+    const conflictQuery: any[] = [];
+    if (updates.email && updates.email !== user.email) {
+      conflictQuery.push({ email: updates.email });
+    }
+    if (updates.username && updates.username !== user.username) {
+      conflictQuery.push({ username: updates.username });
+    }
+
+    if (conflictQuery.length > 0) {
+      const conflict = await User.findOne({ $or: conflictQuery, _id: { $ne: user._id } });
+      if (conflict) {
+        return res
+          .status(400)
+          .json({ message: 'Another user already exists with the same email or username' });
+      }
+    }
+
+    if (updates.username) {
+      user.username = updates.username;
+    }
+    if (updates.email) {
+      user.email = updates.email;
+    }
+
+    await user.save();
+
+    const sanitized = await User.findById(user._id).populate('role', 'name').select('-passwordHash');
+    return res.json(sanitized);
+  } catch (err: any) {
+    console.error('Error in updateUserBasic controller:', err);
+    return res.status(500).json({ message: 'Server error' });
   }
 };
 

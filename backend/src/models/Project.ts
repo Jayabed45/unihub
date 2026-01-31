@@ -4,6 +4,13 @@ export interface IProjectActivitySchedule {
   activityId: number;
   startAt?: Date;
   endAt?: Date;
+  location?: string;
+}
+
+export interface IProjectExtensionActivity {
+  topic: string;
+  hours?: number;
+  resourcePerson?: string;
 }
 
 export interface IProject extends Document {
@@ -16,6 +23,7 @@ export interface IProject extends Document {
   evaluation?: any;
   status: 'Pending' | 'Approved' | 'Rejected';
   activitySchedule?: IProjectActivitySchedule[];
+  extensionActivities?: IProjectExtensionActivity[];
 }
 
 const ProjectSchema: Schema = new Schema({
@@ -26,11 +34,19 @@ const ProjectSchema: Schema = new Schema({
   proposalData: { type: Schema.Types.Mixed, required: false },
   summary: { type: Schema.Types.Mixed, required: false },
   evaluation: { type: Schema.Types.Mixed, required: false },
+  extensionActivities: [
+    {
+      topic: { type: String, required: true },
+      hours: { type: Number, required: false },
+      resourcePerson: { type: String, required: false },
+    },
+  ],
   activitySchedule: [
     {
       activityId: { type: Number, required: true },
       startAt: { type: Date, required: false },
       endAt: { type: Date, required: false },
+      location: { type: String, required: false },
     },
   ],
   status: {

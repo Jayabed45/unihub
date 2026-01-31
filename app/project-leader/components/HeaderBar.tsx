@@ -24,12 +24,14 @@ interface HeaderBarProps {
   onToggleNotifications?: () => void;
   notificationsCount?: number;
   notificationsOpen?: boolean;
+  onOpenProfile?: () => void;
 }
 
 export default function HeaderBar({
   onToggleNotifications,
   notificationsCount = 0,
   notificationsOpen,
+  onOpenProfile,
 }: HeaderBarProps) {
   const pathname = usePathname();
   const [now, setNow] = useState(() => new Date());
@@ -99,6 +101,7 @@ export default function HeaderBar({
             </button>
             <button
               type="button"
+              onClick={onOpenProfile}
               className="flex h-10 w-10 items-center justify-center rounded-full border border-yellow-100 bg-white text-yellow-500 transition hover:-translate-y-0.5 hover:border-yellow-200 hover:shadow"
               aria-label="Your profile"
             >

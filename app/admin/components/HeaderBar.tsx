@@ -10,6 +10,7 @@ interface HeaderBarProps {
   onToggleNotifications?: () => void;
   notificationsCount?: number;
   notificationsOpen?: boolean;
+  onOpenProfile?: () => void;
 }
 
 const timeFormatter = new Intl.DateTimeFormat('en-US', {
@@ -26,7 +27,7 @@ const dateFormatter = new Intl.DateTimeFormat('en-US', {
   year: 'numeric',
 });
 
-export default function HeaderBar({ onToggleNotifications, notificationsCount = 0, notificationsOpen }: HeaderBarProps) {
+export default function HeaderBar({ onToggleNotifications, notificationsCount = 0, notificationsOpen, onOpenProfile }: HeaderBarProps) {
   const pathname = usePathname();
   const [now, setNow] = useState(() => new Date());
 
@@ -93,6 +94,7 @@ export default function HeaderBar({ onToggleNotifications, notificationsCount = 
             </button>
             <button
               type="button"
+              onClick={onOpenProfile}
               className="flex h-10 w-10 items-center justify-center rounded-full border border-amber-100 bg-white text-amber-500 transition hover:-translate-y-0.5 hover:border-amber-200 hover:shadow"
               aria-label="Profile"
             >

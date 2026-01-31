@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
 import ExcelJS from 'exceljs';
-import Project from '../models/Project';
+import Project, { IProject, IProjectExtensionActivity } from '../models/Project';
 import Notification from '../models/Notification';
 import User from '../models/User';
 import Role from '../models/Role';
@@ -9,6 +9,7 @@ import ProjectBeneficiary from '../models/ProjectBeneficiary';
 import ActivityEvaluation from '../models/ActivityEvaluation';
 import { getIO } from '../socket';
 import { sendMail } from '../utils/mailer';
+import { generateEmailHtml } from '../services/email.service';
 
 const getAdminEmails = async (): Promise<string[]> => {
   try {
@@ -22,6 +23,85 @@ const getAdminEmails = async (): Promise<string[]> => {
   } catch (error) {
     console.error('Failed to lookup administrator emails for notifications', error);
     return [];
+  }
+};
+
+export const updateExtensionActivities = async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const rawActivities = (req.body as { activities?: any }).activities;
+
+    if (!id) {
+      return res.status(400).json({ message: 'Project id is required' });
+    }
+
+    if (!Array.isArray(rawActivities)) {
+      return res.status(400).json({ message: 'activities must be an array' });
+    }
+
+    const sanitized: IProjectExtensionActivity[] = [];
+
+    rawActivities.forEach((item, index) => {
+      if (!item || typeof item !== 'object') {
+        return;
+      }
+
+      const topicRaw = typeof item.topic === 'string' ? item.topic.trim() : '';
+      const resourceRaw = typeof item.resourcePerson === 'string' ? item.resourcePerson.trim() : '';
+      const hoursRaw = item.hours;
+
+      if (!topicRaw && !resourceRaw && (hoursRaw === undefined || hoursRaw === null || hoursRaw === '')) {
+        return;
+      }
+
+      if (!topicRaw) {
+        return;
+      }
+
+      let hoursValue: number | undefined;
+      if (typeof hoursRaw === 'number') {
+        if (Number.isFinite(hoursRaw) && hoursRaw >= 0) {
+          hoursValue = hoursRaw;
+        }
+      } else if (typeof hoursRaw === 'string') {
+        const parsed = Number.parseFloat(hoursRaw.trim());
+        if (Number.isFinite(parsed) && parsed >= 0) {
+          hoursValue = parsed;
+        }
+      }
+
+      sanitized.push({
+        topic: topicRaw,
+        hours: hoursValue,
+        resourcePerson: resourceRaw || undefined,
+      });
+    });
+
+    const project = await Project.findByIdAndUpdate(
+      id,
+      {
+        $set: {
+          extensionActivities: sanitized,
+        },
+      },
+      { new: true },
+    ).lean<IProject | null>();
+
+    if (!project) {
+      return res.status(404).json({ message: 'Project not found' });
+    }
+
+    return res.json({
+      projectId: project._id.toString(),
+      activities: (project.extensionActivities || []).map((item) => ({
+        topic: item.topic,
+        hours: item.hours ?? null,
+        resourcePerson: item.resourcePerson ?? '',
+      })),
+    });
+  } catch (error) {
+    console.error('Error updating extension activities', error);
+    return res.status(500).json({ message: 'Failed to update extension activities' });
   }
 };
 
@@ -131,7 +211,11 @@ export const createProject = async (req: Request, res: Response) => {
 export const updateActivitySchedule = async (req: Request, res: Response) => {
   try {
     const { id, activityId } = req.params;
-    const { startAt, endAt } = req.body as { startAt?: string | null; endAt?: string | null };
+    const { startAt, endAt, location } = req.body as {
+      startAt?: string | null;
+      endAt?: string | null;
+      location?: string | null;
+    };
 
     const rawActivityId = Array.isArray(activityId) ? activityId[0] : activityId;
     const numericActivityId = Number.parseInt(rawActivityId, 10);
@@ -146,6 +230,7 @@ export const updateActivitySchedule = async (req: Request, res: Response) => {
 
     let parsedStart: Date | undefined;
     let parsedEnd: Date | undefined;
+    let locationValue: string | undefined;
 
     if (startAt) {
       const d = new Date(startAt);
@@ -163,24 +248,34 @@ export const updateActivitySchedule = async (req: Request, res: Response) => {
       parsedEnd = d;
     }
 
+    if (typeof location === 'string') {
+      const trimmed = location.trim();
+      if (trimmed) {
+        locationValue = trimmed;
+      }
+    }
+
     const schedule = Array.isArray((project as any).activitySchedule)
       ? [...((project as any).activitySchedule as any[])]
       : [];
 
     const idx = schedule.findIndex((item) => Number(item.activityId) === numericActivityId);
 
-    if (!parsedStart && !parsedEnd) {
+    const hasAnyField = typeof parsedStart !== 'undefined' || typeof parsedEnd !== 'undefined' || typeof locationValue !== 'undefined';
+
+    if (!hasAnyField) {
       if (idx !== -1) {
         schedule.splice(idx, 1);
       }
     } else if (idx === -1) {
-      schedule.push({ activityId: numericActivityId, startAt: parsedStart, endAt: parsedEnd });
+      schedule.push({ activityId: numericActivityId, startAt: parsedStart, endAt: parsedEnd, location: locationValue });
     } else {
       const current = schedule[idx] || {};
       schedule[idx] = {
         activityId: numericActivityId,
         startAt: typeof parsedStart !== 'undefined' ? parsedStart : current.startAt,
         endAt: typeof parsedEnd !== 'undefined' ? parsedEnd : current.endAt,
+        location: typeof locationValue !== 'undefined' ? locationValue : (current as any).location,
       };
     }
 
@@ -198,6 +293,7 @@ export const updateActivitySchedule = async (req: Request, res: Response) => {
           // Preserve existing dates if present
           startAt: (item as any).startAt,
           endAt: (item as any).endAt,
+          location: (item as any).location,
         };
       });
 
@@ -209,10 +305,124 @@ export const updateActivitySchedule = async (req: Request, res: Response) => {
       (item: any) => Number(item.activityId) === numericActivityId,
     );
 
+    // Notify registered participants about the updated schedule (socket + email)
+    try {
+      const registrations = await ActivityRegistration.find({
+        project: saved._id,
+        activityId: numericActivityId,
+      })
+        .select({ participantEmail: 1 })
+        .lean();
+
+      if (registrations.length > 0) {
+        // Derive activity title from training-design snapshot, same logic as listParticipantActivities
+        let activityTitle = `Activity ${numericActivityId + 1}`;
+        try {
+          const proposal: any = (saved as any).proposalData;
+          const trainingSnapshot = proposal && proposal['training-design'];
+
+          if (trainingSnapshot && Array.isArray(trainingSnapshot.editableCells)) {
+            const cells: string[] = trainingSnapshot.editableCells;
+            let indexCounter = 0;
+
+            for (let i = 0; i + 1 < cells.length; i += 2) {
+              const title = (cells[i] || '').trim();
+              if (!title) continue;
+
+              if (indexCounter === numericActivityId) {
+                activityTitle = title;
+                break;
+              }
+
+              indexCounter += 1;
+            }
+          }
+        } catch (parseError) {
+          console.error('Failed to derive activity title for updateActivitySchedule notifications', parseError);
+        }
+
+        const projectName = (saved as any).name || 'Untitled project';
+        const startLabel = updatedEntry?.startAt
+          ? new Date(updatedEntry.startAt).toLocaleString('en-PH', {
+              dateStyle: 'medium',
+              timeStyle: 'short',
+            })
+          : '';
+        const endLabel = updatedEntry?.endAt
+          ? new Date(updatedEntry.endAt).toLocaleString('en-PH', {
+              dateStyle: 'medium',
+              timeStyle: 'short',
+            })
+          : '';
+        const locationLabel = updatedEntry?.location || '';
+
+        const io = getIO();
+
+        for (const reg of registrations) {
+          const recipientEmail = reg.participantEmail;
+          if (!recipientEmail) continue;
+
+          const lines: string[] = [];
+          if (startLabel) lines.push(`Start: ${startLabel}`);
+          if (endLabel) lines.push(`End: ${endLabel}`);
+          if (locationLabel) lines.push(`Location: ${locationLabel}`);
+
+          const details = lines.length > 0 ? ` (${lines.join(' · ')})` : '';
+
+          const notif = await Notification.create({
+            title: 'Activity schedule updated',
+            message: `[${projectName}] ${activityTitle}${details}`,
+            project: saved._id,
+            recipientEmail,
+          });
+
+          try {
+            io.emit('notification:new', {
+              id: notif._id.toString(),
+              title: notif.title,
+              message: notif.message,
+              projectId: saved._id.toString(),
+              recipientEmail: notif.recipientEmail,
+              timestamp: notif.createdAt
+                ? notif.createdAt.toLocaleString('en-PH', {
+                    dateStyle: 'medium',
+                    timeStyle: 'short',
+                  })
+                : '',
+              read: notif.read,
+            });
+          } catch (socketError) {
+            console.error('Failed to emit activity schedule update notification over socket', socketError);
+          }
+
+          try {
+            const userDoc = await User.findOne({ email: recipientEmail }).lean();
+            const { subject, html } = generateEmailHtml({
+              notification: notif,
+              project: saved as any,
+              user: userDoc || null,
+            });
+
+            await sendMail({
+              to: recipientEmail,
+              subject,
+              html,
+              text: notif.message,
+            });
+          } catch (emailError) {
+            console.error('Failed to send activity schedule update email', emailError);
+          }
+        }
+      }
+    } catch (notifyError) {
+      console.error('Failed to fan out activity schedule update notifications', notifyError);
+    }
+
     return res.json({
       activityId: numericActivityId,
       startAt: updatedEntry?.startAt ?? null,
       endAt: updatedEntry?.endAt ?? null,
+      location: updatedEntry?.location ?? null,
     });
   } catch (error) {
     console.error('Error updating activity schedule', error);
@@ -953,15 +1163,17 @@ export const listParticipantActivities = async (req: Request, res: Response) => 
 
       let startAt: Date | null = null;
       let endAt: Date | null = null;
+      let location: string | null = null;
 
       try {
-        const scheduleList: Array<{ activityId: number; startAt?: Date; endAt?: Date }> = Array.isArray(
+        const scheduleList: Array<{ activityId: number; startAt?: Date; endAt?: Date; location?: string | null }> = Array.isArray(
           (project as any)?.activitySchedule,
         )
           ? (((project as any).activitySchedule as any[]) || []).map((item) => ({
               activityId: Number((item as any).activityId),
               startAt: (item as any).startAt as Date | undefined,
               endAt: (item as any).endAt as Date | undefined,
+              location: typeof (item as any).location === 'string' ? ((item as any).location as string) : undefined,
             }))
           : [];
 
@@ -969,6 +1181,7 @@ export const listParticipantActivities = async (req: Request, res: Response) => 
         if (scheduleEntry) {
           startAt = scheduleEntry.startAt ?? null;
           endAt = scheduleEntry.endAt ?? null;
+          location = typeof scheduleEntry.location === 'string' ? scheduleEntry.location : null;
         }
       } catch (scheduleError) {
         console.error('Failed to derive activity schedule for listParticipantActivities', scheduleError);
@@ -983,6 +1196,7 @@ export const listParticipantActivities = async (req: Request, res: Response) => 
         updatedAt: reg.updatedAt ?? reg.createdAt,
         startAt,
         endAt,
+        location,
       };
     });
 

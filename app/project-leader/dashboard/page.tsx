@@ -33,9 +33,40 @@ export default function ProjectLeaderDashboard() {
   useEffect(() => {
     async function fetchData() {
       try {
+        let leaderId: string | undefined;
+        let leaderEmail: string | undefined;
+
+        try {
+          const stored = window.localStorage.getItem('unihub-auth');
+          if (stored) {
+            const parsed = JSON.parse(stored) as { id?: string; email?: string; role?: string } | null;
+            if (parsed?.role === 'Project Leader') {
+              if (parsed.id) leaderId = parsed.id;
+              if (parsed.email && typeof parsed.email === 'string') leaderEmail = parsed.email;
+            }
+          }
+        } catch {
+          // best-effort only; fall back to unfiltered endpoints
+        }
+
+        const projectParams = new URLSearchParams();
+        if (leaderId) {
+          projectParams.append('projectLeaderId', leaderId);
+        }
+        const projectsUrl = projectParams.toString()
+          ? `http://localhost:5000/api/projects?${projectParams.toString()}`
+          : 'http://localhost:5000/api/projects';
+
+        const notifParams = new URLSearchParams();
+        if (leaderId) notifParams.append('leaderId', leaderId);
+        if (leaderEmail) notifParams.append('leaderEmail', leaderEmail);
+        const notificationsUrl = notifParams.toString()
+          ? `http://localhost:5000/api/notifications?${notifParams.toString()}`
+          : 'http://localhost:5000/api/notifications';
+
         const [projectsRes, notificationsRes] = await Promise.all([
-          fetch('http://localhost:5000/api/projects'),
-          fetch('http://localhost:5000/api/notifications'),
+          fetch(projectsUrl),
+          fetch(notificationsUrl),
         ]);
 
         if (projectsRes.ok) {

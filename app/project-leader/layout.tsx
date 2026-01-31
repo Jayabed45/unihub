@@ -30,6 +30,13 @@ export default function ProjectLeaderLayout({ children }: { children: ReactNode 
   const previousNotificationIdsRef = useRef<string[]>([]);
   const initialNotificationsLoadedRef = useRef(false);
   const socketRef = useRef<Socket | null>(null);
+  const [profileOpen, setProfileOpen] = useState(false);
+  const [profileLoading, setProfileLoading] = useState(false);
+  const [profileSaving, setProfileSaving] = useState(false);
+  const [profileError, setProfileError] = useState<string | null>(null);
+  const [profileUsername, setProfileUsername] = useState('');
+  const [profileEmail, setProfileEmail] = useState('');
+  const [profileRoleName, setProfileRoleName] = useState('');
 
   const handleLogout = useCallback(() => {
     if (isLoggingOut) return;
@@ -48,6 +55,104 @@ export default function ProjectLeaderLayout({ children }: { children: ReactNode 
       }, 400);
     }, 600);
   }, [isLoggingOut, router]);
+
+  const handleOpenProfile = useCallback(async () => {
+    try {
+      setProfileError(null);
+      setProfileLoading(true);
+
+      const stored = window.localStorage.getItem(STORAGE_KEY);
+      if (!stored) {
+        setProfileError('Your session information is missing. Please sign out and sign in again.');
+        setProfileLoading(false);
+        setProfileOpen(true);
+        return;
+      }
+
+      const parsed = JSON.parse(stored) as StoredUser | null;
+      if (!parsed?.id) {
+        setProfileError('Your session information is incomplete. Please sign out and sign in again.');
+        setProfileLoading(false);
+        setProfileOpen(true);
+        return;
+      }
+
+      const res = await fetch(`http://localhost:5000/api/auth/users/${encodeURIComponent(parsed.id)}`);
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setProfileError(data.message || 'Failed to load profile. Please try again.');
+        setProfileLoading(false);
+        setProfileOpen(true);
+        return;
+      }
+
+      const data = (await res.json()) as {
+        username?: string;
+        email?: string;
+        role?: { name?: string } | string;
+      };
+
+      setProfileUsername((data.username || '').trim());
+      setProfileEmail((data.email || '').trim());
+      const roleName = typeof data.role === 'string' ? data.role : data.role?.name;
+      setProfileRoleName(roleName || 'Project Leader');
+      setProfileOpen(true);
+    } catch (error) {
+      console.error('Failed to load project leader profile', error);
+      setProfileError('Failed to load profile. Please check your connection and try again.');
+      setProfileOpen(true);
+    } finally {
+      setProfileLoading(false);
+    }
+  }, []);
+
+  const handleSaveProfile = useCallback(async () => {
+    try {
+      setProfileError(null);
+      setProfileSaving(true);
+
+      const stored = window.localStorage.getItem(STORAGE_KEY);
+      if (!stored) {
+        setProfileError('Your session information is missing. Please sign out and sign in again.');
+        setProfileSaving(false);
+        return;
+      }
+
+      const parsed = JSON.parse(stored) as StoredUser | null;
+      if (!parsed?.id) {
+        setProfileError('Your session information is incomplete. Please sign out and sign in again.');
+        setProfileSaving(false);
+        return;
+      }
+
+      const payload = {
+        username: profileUsername.trim(),
+        email: profileEmail.trim(),
+      };
+
+      const res = await fetch(`http://localhost:5000/api/auth/users/${encodeURIComponent(parsed.id)}`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload),
+      });
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setProfileError(data.message || 'Failed to save profile. Please try again.');
+        setProfileSaving(false);
+        return;
+      }
+
+      setProfileOpen(false);
+    } catch (error) {
+      console.error('Failed to save project leader profile', error);
+      setProfileError('Failed to save profile. Please check your connection and try again.');
+    } finally {
+      setProfileSaving(false);
+    }
+  }, [profileUsername, profileEmail]);
 
   useEffect(() => {
     try {
@@ -75,7 +180,33 @@ export default function ProjectLeaderLayout({ children }: { children: ReactNode 
   useEffect(() => {
     const fetchNotifications = async () => {
       try {
-        const res = await fetch('http://localhost:5000/api/notifications');
+        let leaderId: string | undefined;
+        let leaderEmail: string | undefined;
+
+        try {
+          const stored = window.localStorage.getItem(STORAGE_KEY);
+          if (stored) {
+            const parsed = JSON.parse(stored) as StoredUser | null;
+            if (parsed?.id) {
+              leaderId = parsed.id;
+            }
+            if (parsed?.email && typeof parsed.email === 'string') {
+              leaderEmail = parsed.email;
+            }
+          }
+        } catch {
+          // best-effort only; fall back to unfiltered notifications
+        }
+
+        const params = new URLSearchParams();
+        if (leaderId) params.append('leaderId', leaderId);
+        if (leaderEmail) params.append('leaderEmail', leaderEmail);
+
+        const url = params.toString()
+          ? `http://localhost:5000/api/notifications?${params.toString()}`
+          : 'http://localhost:5000/api/notifications';
+
+        const res = await fetch(url);
         if (!res.ok) {
           return;
         }
@@ -310,6 +441,85 @@ export default function ProjectLeaderLayout({ children }: { children: ReactNode 
           />
         </div>
       )}
+
+      {profileOpen && (
+        <div className="fixed inset-0 z-60 flex items-center justify-center bg-black/40 px-4" role="dialog" aria-modal="true">
+          <div className="w-full max-w-md rounded-2xl border border-yellow-100 bg-white p-6 text-sm text-gray-800 shadow-2xl">
+            <div className="mb-4 flex items-start justify-between gap-3">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wide text-yellow-500">My profile</p>
+                <h3 className="mt-1 text-base font-semibold text-gray-900">Account details</h3>
+                {profileRoleName && (
+                  <p className="mt-0.5 text-[11px] text-gray-500">Role: {profileRoleName}</p>
+                )}
+              </div>
+              <button
+                type="button"
+                onClick={() => setProfileOpen(false)}
+                className="rounded-full border border-yellow-200 px-3 py-1 text-xs font-semibold text-yellow-700 hover:bg-yellow-50"
+              >
+                Close
+              </button>
+            </div>
+
+            {profileLoading ? (
+              <p className="text-xs text-gray-600">Loading profile…</p>
+            ) : (
+              <div className="space-y-3 text-xs">
+                <div className="space-y-1">
+                  <label htmlFor="pl-profile-username" className="font-medium text-gray-800">
+                    Username
+                  </label>
+                  <input
+                    id="pl-profile-username"
+                    type="text"
+                    value={profileUsername}
+                    onChange={(e) => setProfileUsername(e.target.value)}
+                    className="w-full rounded-lg border border-gray-200 px-3 py-1.5 text-[11px] text-gray-800 focus:border-yellow-400 focus:outline-none focus:ring-2 focus:ring-yellow-200"
+                    placeholder="Enter your username"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label htmlFor="pl-profile-email" className="font-medium text-gray-800">
+                    Email
+                  </label>
+                  <input
+                    id="pl-profile-email"
+                    type="email"
+                    value={profileEmail}
+                    onChange={(e) => setProfileEmail(e.target.value)}
+                    className="w-full rounded-lg border border-gray-200 px-3 py-1.5 text-[11px] text-gray-800 focus:border-yellow-400 focus:outline-none focus:ring-2 focus:ring-yellow-200"
+                    placeholder="Enter your email address"
+                  />
+                </div>
+
+                {profileError && (
+                  <p className="mt-1 text-[11px] font-medium text-red-600">{profileError}</p>
+                )}
+
+                <div className="mt-3 flex items-center justify-end gap-2 text-xs">
+                  <button
+                    type="button"
+                    onClick={() => setProfileOpen(false)}
+                    className="rounded-full border border-yellow-200 px-3 py-1 font-semibold text-yellow-700 hover:bg-yellow-50"
+                    disabled={profileSaving}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleSaveProfile}
+                    className="rounded-full bg-yellow-500 px-4 py-1.5 font-semibold text-white shadow hover:bg-yellow-600 disabled:cursor-not-allowed disabled:opacity-60"
+                    disabled={profileSaving}
+                  >
+                    {profileSaving ? 'Saving…' : 'Save changes'}
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
       <div className="sticky top-0 h-screen">
         <Sidebar items={projectLeaderNavigation} onLogout={handleLogout} logoutDisabled={isLoggingOut} />
       </div>
@@ -319,6 +529,7 @@ export default function ProjectLeaderLayout({ children }: { children: ReactNode 
           onToggleNotifications={handleToggleNotifications}
           notificationsOpen={notificationsOpen}
           notificationsCount={notifications.filter((item) => !item.read).length}
+          onOpenProfile={handleOpenProfile}
         />
         <div className="mx-auto max-w-6xl px-6 py-10">
           {children}

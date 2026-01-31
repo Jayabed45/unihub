@@ -20,6 +20,7 @@ import {
   upsertActivityEvaluation,
   listActivityEvaluations,
   listProjectEvaluationSummaries,
+  updateExtensionActivities,
 } from '../controllers/projectController';
 
 const router = Router();
@@ -44,5 +45,6 @@ router.delete('/:id/activities/:activityId/registrations', deleteActivityRegistr
 router.patch('/:id/activities/:activityId/schedule', updateActivitySchedule);
 router.patch('/:id/activities/:activityId/evaluations', upsertActivityEvaluation);
 router.get('/:id/activities/:activityId/evaluations', listActivityEvaluations);
+router.patch('/:id/extension-activities', updateExtensionActivities);
 
 export default router;

@@ -17,6 +17,7 @@ interface ProjectActivity {
   resourcePerson?: string;
   startAt?: string | null;
   endAt?: string | null;
+  location?: string | null;
 }
 
 type EvaluationRating = 1 | 2 | 3 | 4;
@@ -158,6 +159,7 @@ export default function ParticipantFeedsPage() {
         activityTitle: string;
         startAt?: string | null;
         endAt?: string | null;
+        location?: string | null;
       }
     >
   >({});
@@ -512,6 +514,7 @@ export default function ParticipantFeedsPage() {
         activityTitle: string;
         startAt?: string | null;
         endAt?: string | null;
+        location?: string | null;
       }>;
 
       const joinedMap: Record<string, 'joined'> = {};
@@ -524,6 +527,7 @@ export default function ParticipantFeedsPage() {
           activityTitle: string;
           startAt?: string | null;
           endAt?: string | null;
+          location?: string | null;
         }
       > = {};
 
@@ -537,6 +541,7 @@ export default function ParticipantFeedsPage() {
           activityTitle: item.activityTitle,
           startAt: item.startAt,
           endAt: item.endAt,
+          location: item.location,
         };
       });
 
@@ -689,6 +694,8 @@ export default function ParticipantFeedsPage() {
 
       const title = payload.title;
       const message: string | undefined = (payload as any).message;
+      const projectIdFromPayload: string | undefined = (payload as any).projectId;
+      const recipientEmailFromPayload: string | undefined = (payload as any).recipientEmail;
 
       if (title === 'New project created' || title === 'Project approved') {
         fetchProjects();
@@ -710,17 +717,44 @@ export default function ParticipantFeedsPage() {
         }
       }
 
-      if (!message || !currentEmail || !message.includes(currentEmail)) {
-        return;
+      const isScheduleUpdate = title === 'Activity schedule updated';
+
+      if (!isScheduleUpdate) {
+        if (!message || !currentEmail || !message.includes(currentEmail)) {
+          return;
+        }
+      } else {
+        // For schedule updates, rely on recipientEmail from payload when available
+        if (recipientEmailFromPayload && currentEmail && recipientEmailFromPayload !== currentEmail) {
+          return;
+        }
       }
 
       if (
         title === 'Join request' ||
         title === 'Join request approved' ||
-        title === 'Activity join'
+        title === 'Activity join' ||
+        title === 'Activity schedule updated'
       ) {
         fetchPendingFromNotifications();
         fetchJoinedActivities();
+
+        // If the participant currently has the activities drawer open for this project,
+        // refresh the list so schedule/location changes appear in real time.
+        if (
+          title === 'Activity schedule updated' &&
+          activitiesModalOpen &&
+          activitiesModalProject &&
+          projectIdFromPayload &&
+          activitiesModalProject._id === projectIdFromPayload
+        ) {
+          const project = projects.find((p) => p._id === projectIdFromPayload);
+          if (project) {
+            openActivitiesModal(project).catch(() => {
+              // best-effort only
+            });
+          }
+        }
       }
     });
 
@@ -744,15 +778,15 @@ export default function ParticipantFeedsPage() {
 
       let parsed: ProjectActivity[] = [];
 
-      const schedule: Array<{ activityId: number; startAt?: string; endAt?: string }> = Array.isArray(
-        (data as any)?.activitySchedule,
-      )
-        ? (((data as any).activitySchedule as any[]) || []).map((item) => ({
-            activityId: Number((item as any).activityId),
-            startAt: (item as any).startAt as string | undefined,
-            endAt: (item as any).endAt as string | undefined,
-          }))
-        : [];
+      const schedule: Array<{ activityId: number; startAt?: string; endAt?: string; location?: string | null }> =
+        Array.isArray((data as any)?.activitySchedule)
+          ? (((data as any).activitySchedule as any[]) || []).map((item) => ({
+              activityId: Number((item as any).activityId),
+              startAt: (item as any).startAt as string | undefined,
+              endAt: (item as any).endAt as string | undefined,
+              location: typeof (item as any).location === 'string' ? ((item as any).location as string) : undefined,
+            }))
+          : [];
 
       if (trainingSnapshot && Array.isArray(trainingSnapshot.editableCells)) {
         const cells: string[] = trainingSnapshot.editableCells;
@@ -771,10 +805,50 @@ export default function ParticipantFeedsPage() {
             resourcePerson: resourcePerson || undefined,
             startAt: scheduleEntry?.startAt ?? null,
             endAt: scheduleEntry?.endAt ?? null,
+            location: scheduleEntry?.location ?? null,
           });
 
           activityIndexCounter += 1;
         }
+      }
+
+      // Append any saved extension activities as additional entries so participants can see them
+      try {
+        const existingExt: Array<{ topic?: string; hours?: number | null; resourcePerson?: string }> =
+          Array.isArray((data as any)?.extensionActivities) ? (data as any).extensionActivities : [];
+
+        if (existingExt.length > 0) {
+          let nextActivityId = parsed.length
+            ? parsed.reduce((max, item) => (item.activityId > max ? item.activityId : max), parsed[0].activityId) + 1
+            : 0;
+
+          existingExt.forEach((item, index) => {
+            const rawTopic = typeof item.topic === 'string' ? item.topic.trim() : '';
+            const title = rawTopic || `Extension activity ${index + 1}`;
+
+            if (!title) return;
+
+            const resourcePerson =
+              typeof item.resourcePerson === 'string' && item.resourcePerson.trim()
+                ? item.resourcePerson.trim()
+                : undefined;
+
+            const scheduleEntry = schedule.find((entry) => entry.activityId === nextActivityId);
+
+            parsed.push({
+              activityId: nextActivityId,
+              title,
+              resourcePerson,
+              startAt: scheduleEntry?.startAt ?? null,
+              endAt: scheduleEntry?.endAt ?? null,
+              location: scheduleEntry?.location ?? null,
+            });
+
+            nextActivityId += 1;
+          });
+        }
+      } catch {
+        // ignore extension parsing errors
       }
 
       setActivitiesForModal(parsed);
@@ -1103,7 +1177,8 @@ export default function ParticipantFeedsPage() {
                           {activity.resourcePerson ? (
                            <p className="mt-0.5 text-xs text-gray-600">Resource person: {activity.resourcePerson}</p>
                           ) : null}
-                          {(hasStart || hasEnd) && (
+
+                          {(hasStart || hasEnd || (activity.location && activity.location.trim())) && (
                             <p className="mt-0.5 text-[11px] text-gray-600">
                               {hasStart && activity.startAt && (
                                 <>
@@ -1114,14 +1189,10 @@ export default function ParticipantFeedsPage() {
                                   })}
                                 </>
                               )}
-                              {hasEnd && activity.endAt && (
+                              {activity.location && activity.location.trim() && (
                                 <>
-                                  {hasStart ? ' · ' : ''}
-                                  End:{' '}
-                                  {new Date(activity.endAt).toLocaleString('en-PH', {
-                                    dateStyle: 'medium',
-                                    timeStyle: 'short',
-                                  })}
+                                  {(hasStart || hasEnd) ? ' · ' : ''}
+                                  Location: {activity.location.trim()}
                                 </>
                               )}
                               {isExpired && ' · Ended'}
@@ -1193,7 +1264,7 @@ export default function ParticipantFeedsPage() {
                 </p>
               ) : null}
 
-              {(activityDetailActivity.startAt || activityDetailActivity.endAt) && (
+              {(activityDetailActivity.startAt || activityDetailActivity.endAt || (activityDetailActivity.location && activityDetailActivity.location.trim())) && (
                 <p className="text-[11px] text-gray-600">
                   {activityDetailActivity.startAt && (
                     <>
@@ -1212,6 +1283,12 @@ export default function ParticipantFeedsPage() {
                         dateStyle: 'medium',
                         timeStyle: 'short',
                       })}
+                    </>
+                  )}
+                  {activityDetailActivity.location && activityDetailActivity.location.trim() && (
+                    <>
+                      {(activityDetailActivity.startAt || activityDetailActivity.endAt) ? ' · ' : ''}
+                      Location: {activityDetailActivity.location.trim()}
                     </>
                   )}
                 </p>

@@ -8,7 +8,41 @@ import { generateEmailHtml } from '../services/email.service';
 
 export const listNotifications = async (req: Request, res: Response) => {
   try {
-    const notifications = await Notification.find().sort({ createdAt: -1 }).limit(50).lean();
+    const { leaderId, leaderEmail } = req.query as { leaderId?: string; leaderEmail?: string };
+
+    let filter: Record<string, any> = {};
+
+    if ((leaderId && leaderId.trim()) || (leaderEmail && leaderEmail.trim())) {
+      const orFilters: any[] = [];
+
+      if (leaderId && leaderId.trim()) {
+        try {
+          const projects = await Project.find({ projectLeader: leaderId.trim() })
+            .select({ _id: 1 })
+            .lean();
+
+          const projectIds = projects.map((p) => p._id);
+          if (projectIds.length > 0) {
+            orFilters.push({ project: { $in: projectIds } });
+          }
+        } catch (projectLookupError) {
+          console.error('Failed to lookup leader projects for notifications', projectLookupError);
+        }
+      }
+
+      if (leaderEmail && leaderEmail.trim()) {
+        orFilters.push({ recipientEmail: leaderEmail.trim() });
+      }
+
+      if (orFilters.length > 0) {
+        filter = { $or: orFilters };
+      } else {
+        // No matching projects/emails; ensure we return an empty list instead of all notifications
+        filter = { _id: null };
+      }
+    }
+
+    const notifications = await Notification.find(filter).sort({ createdAt: -1 }).limit(50).lean();
     return res.json(notifications);
   } catch (error) {
     console.error('Error listing notifications', error);
