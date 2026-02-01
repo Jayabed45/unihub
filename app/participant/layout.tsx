@@ -1,8 +1,8 @@
 'use client';
 
-import { ReactNode, useCallback, useEffect, useRef, useState } from 'react';
+import { ReactNode, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { io, type Socket } from 'socket.io-client';
+import Link from 'next/link';
 
 import Sidebar from './components/Sidebar';
 import HeaderBar from './components/HeaderBar';
@@ -23,13 +23,13 @@ export default function ParticipantLayout({ children }: { children: ReactNode })
   const [isAuthorized, setIsAuthorized] = useState(false);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
   const [logoutProgress, setLogoutProgress] = useState(0);
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const [toastNotification, setToastNotification] = useState<NotificationItem | null>(null);
   const [toastVisible, setToastVisible] = useState(false);
   const previousNotificationIdsRef = useRef<string[]>([]);
   const initialNotificationsLoadedRef = useRef(false);
-  const socketRef = useRef<Socket | null>(null);
   const [profileOpen, setProfileOpen] = useState(false);
   const [profileSlideIn, setProfileSlideIn] = useState(false);
   const [profileOverlayIn, setProfileOverlayIn] = useState(false);
@@ -256,7 +256,23 @@ export default function ParticipantLayout({ children }: { children: ReactNode })
   useEffect(() => {
     const fetchNotifications = async () => {
       try {
-        const res = await fetch('http://localhost:5000/api/notifications');
+        // Restrict participant notifications to their own recipientEmail
+        let participantEmail: string | undefined;
+        try {
+          const stored = window.localStorage.getItem(STORAGE_KEY);
+          if (stored) {
+            const parsed = JSON.parse(stored) as StoredUser | null;
+            if (parsed?.email && typeof parsed.email === 'string') {
+              participantEmail = parsed.email.trim();
+            }
+          }
+        } catch {}
+
+        const url = participantEmail
+          ? `http://localhost:5000/api/notifications?email=${encodeURIComponent(participantEmail)}`
+          : 'http://localhost:5000/api/notifications';
+
+        const res = await fetch(url);
         if (!res.ok) {
           return;
         }
@@ -307,52 +323,7 @@ export default function ParticipantLayout({ children }: { children: ReactNode })
     fetchNotifications();
   }, []);
 
-  useEffect(() => {
-    const socket = io('http://localhost:5000');
-    socketRef.current = socket;
-
-    // Identify the currently authenticated participant for online/offline tracking
-    try {
-      const stored = window.localStorage.getItem(STORAGE_KEY);
-      if (stored) {
-        const parsed = JSON.parse(stored) as StoredUser | null;
-        if (parsed?.id) {
-          socket.emit('identify', { userId: parsed.id });
-        }
-      }
-    } catch {
-      // best-effort only
-    }
-
-    socket.on('notification:new', (payload: NotificationItem) => {
-      if (
-        (payload.title === 'New project created' ||
-        payload.title === 'Join request' ||
-        payload.title === 'Project approved' ||
-        payload.title === 'Activity join') &&
-        ![
-          'Activity Starting Soon',
-          'Activity Started',
-          'Activity Ending Soon',
-          'Activity Ended'
-        ].includes(payload.title)
-      ) {
-        return;
-      }
-
-      setNotifications((prev) => {
-        if (prev.some((n) => n.id === payload.id)) {
-          return prev;
-        }
-        return [payload, ...prev];
-      });
-    });
-
-    return () => {
-      socket.disconnect();
-      socketRef.current = null;
-    };
-  }, []);
+  // Realtime notifications via sockets disabled during development to prevent persistent compiling overlay
 
   useEffect(() => {
     if (!notifications.length) {
@@ -666,6 +637,42 @@ export default function ParticipantLayout({ children }: { children: ReactNode })
         </div>
       )}
 
+      {/* Mobile navigation drawer */}
+      {mobileNavOpen && (
+        <div className="fixed inset-0 z-50 lg:hidden" role="dialog" aria-modal="true">
+          <div
+            className={`absolute inset-0 bg-black/40 transition-opacity duration-300 ${mobileNavOpen ? 'opacity-100' : 'opacity-0'}`}
+            onClick={() => setMobileNavOpen(false)}
+          />
+          <div
+            className={`absolute left-0 top-0 h-full w-full max-w-xs bg-white border-r border-yellow-100 shadow-2xl transition-transform duration-300 ease-out ${
+              mobileNavOpen ? 'translate-x-0' : '-translate-x-full'
+            }`}
+          >
+            <div className="px-5 pt-6 pb-4">
+              <h2 className="text-xl font-bold text-gray-900">UniHub</h2>
+              <p className="mt-0.5 text-xs text-gray-500">Participant</p>
+            </div>
+            <nav className="px-3 space-y-1">
+              {participantNavigation.map((item) => (
+                <Link
+                  key={item.name}
+                  href={item.href}
+                  onClick={() => setMobileNavOpen(false)}
+                  className="flex items-center gap-3 rounded-xl px-4 py-3 text-sm font-medium text-gray-700 hover:bg-yellow-50"
+                >
+                  <item.icon className="h-5 w-5 text-yellow-600" />
+                  <span>{item.name}</span>
+                </Link>
+              ))}
+            </nav>
+            <div className="p-4 mt-auto text-xs text-gray-400">
+              © {new Date().getFullYear()} UniHub
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="sticky top-0 h-screen">
         <Sidebar items={participantNavigation} onLogout={handleLogout} logoutDisabled={isLoggingOut} />
       </div>
@@ -676,8 +683,30 @@ export default function ParticipantLayout({ children }: { children: ReactNode })
           notificationsOpen={notificationsOpen}
           notificationsCount={notifications.filter((item) => !item.read).length}
           onOpenProfile={handleOpenProfile}
+          onOpenMobileNav={() => setMobileNavOpen(true)}
         />
-        <div className="mx-auto max-w-6xl px-6 py-10">{children}</div>
+        <Suspense
+          fallback={
+            <div className="mx-auto max-w-6xl px-6 py-10 space-y-6">
+              <div className="h-6 w-40 rounded-lg bg-amber-100 animate-pulse" />
+              <div className="h-4 w-72 rounded-lg bg-amber-50 animate-pulse" />
+              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                {Array.from({ length: 6 }).map((_, i) => (
+                  <div key={i} className="rounded-2xl border border-amber-100 bg-white p-4 shadow-sm">
+                    <div className="h-4 w-1/2 rounded bg-amber-100 animate-pulse" />
+                    <div className="mt-3 space-y-2">
+                      <div className="h-3 w-full rounded bg-amber-50 animate-pulse" />
+                      <div className="h-3 w-5/6 rounded bg-amber-50 animate-pulse" />
+                      <div className="h-3 w-2/3 rounded bg-amber-50 animate-pulse" />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          }
+        >
+          <div className="mx-auto max-w-6xl px-6 py-10">{children}</div>
+        </Suspense>
       </main>
 
       <NotificationsPanel

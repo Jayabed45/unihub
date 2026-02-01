@@ -9,7 +9,7 @@ import ProjectBeneficiary from '../models/ProjectBeneficiary';
 import ActivityEvaluation from '../models/ActivityEvaluation';
 import { getIO } from '../socket';
 import { sendMail } from '../utils/mailer';
-import { generateEmailHtml } from '../services/email.service';
+import { generateEmailHtml, buildBasicEmail, buildRoleEmail } from '../services/email.service';
 
 const getAdminEmails = async (): Promise<string[]> => {
   try {
@@ -187,13 +187,24 @@ export const createProject = async (req: Request, res: Response) => {
       if (adminEmails.length > 0) {
         await Promise.all(
           adminEmails.map((addr) =>
-            sendMail({
-              to: addr,
-              subject: `New project submitted: ${saved.name}`,
-              text: `Hello Admin,\n\nA new project "${saved.name}" has been submitted by ${
-                leaderEmail ?? 'a project leader'
-              }.\n\nPlease review it in the UniHub admin dashboard.\n\n– UniHub System`,
-            }),
+            (async () => {
+              const subject = `New project submitted: ${saved.name}`;
+              const html = buildRoleEmail(
+                'Admin',
+                subject,
+                `
+                  <p class="paragraph">A new project has been submitted by <strong>${leaderEmail ?? 'a project leader'}</strong>.</p>
+                  <p class="paragraph"><strong>Project:</strong> ${saved.name}</p>
+                  <a href="${process.env.FRONTEND_URL || 'http://localhost:3000'}/admin/dashboard" class="btn">Review in Admin Dashboard</a>
+                `,
+              );
+              await sendMail({
+                to: addr,
+                subject,
+                html,
+                text: `Hello Admin,\n\nA new project "${saved.name}" has been submitted by ${leaderEmail ?? 'a project leader'}.\n\nPlease review it in the UniHub admin dashboard.\n\n– UniHub System`,
+              });
+            })(),
           ),
         );
       }
@@ -521,9 +532,20 @@ export const evaluateProject = async (req: Request, res: Response) => {
         try {
           const leaderEmail = await getProjectLeaderEmail(project.projectLeader);
           if (leaderEmail) {
+            const subject = `Your project "${project.name}" has been approved`;
+            const html = buildRoleEmail(
+              'Project Leader',
+              subject,
+              `
+                <p class="paragraph">Your project has been approved by the UniHub administrators.</p>
+                <p class="paragraph">You can now publish activities and accept participants.</p>
+                <a href="${process.env.FRONTEND_URL || 'http://localhost:3000'}/project-leader/dashboard" class="btn">Go to Leader Dashboard</a>
+              `,
+            );
             await sendMail({
               to: leaderEmail,
-              subject: `Your project "${project.name}" has been approved`,
+              subject,
+              html,
               text: `Hi,\n\nYour project "${project.name}" has been approved by the UniHub administrators.\n\nYou can now publish activities and accept participants.\n\n– UniHub Team`,
             });
           }
@@ -605,21 +627,43 @@ export const requestJoinProject = async (req: Request, res: Response) => {
 
       await Promise.all([
         // Admin emails
-        ...adminEmails.map((addr) =>
-          sendMail({
+        ...adminEmails.map((addr) => (async () => {
+          const subject = `New project join request: ${project.name}`;
+          const html = buildRoleEmail(
+            'Admin',
+            subject,
+            `
+              <p class="paragraph"><strong>${email}</strong> has requested to join the project <strong>${project.name}</strong>.</p>
+              <a href="${process.env.FRONTEND_URL || 'http://localhost:3000'}/admin/dashboard" class="btn">Review in Admin Dashboard</a>
+            `,
+          );
+          await sendMail({
             to: addr,
-            subject: `New project join request: ${project.name}`,
+            subject,
+            html,
             text: `Hello Admin,\n\n${email} has requested to join the project "${project.name}".\n\nYou can review this project in the UniHub admin dashboard.\n\n– UniHub System`,
-          }),
-        ),
+          });
+        })()),
         // Project leader email
         ...(leaderEmail
           ? [
-              sendMail({
-                to: leaderEmail,
-                subject: `New join request for "${project.name}"`,
-                text: `Hi,\n\n${email} has requested to join your project "${project.name}".\n\nYou can review and respond to this request in your UniHub Project Leader dashboard.\n\n– UniHub Team`,
-              }),
+              (async () => {
+                const subject = `New join request for "${project.name}"`;
+                const html = buildRoleEmail(
+                  'Project Leader',
+                  subject,
+                  `
+                    <p class="paragraph"><strong>${email}</strong> has requested to join your project <strong>${project.name}</strong>.</p>
+                    <a href="${process.env.FRONTEND_URL || 'http://localhost:3000'}/project-leader/participants" class="btn">Review Join Requests</a>
+                  `,
+                );
+                await sendMail({
+                  to: leaderEmail,
+                  subject,
+                  html,
+                  text: `Hi,\n\n${email} has requested to join your project "${project.name}".\n\nYou can review and respond to this request in your UniHub Project Leader dashboard.\n\n– UniHub Team`,
+                });
+              })(),
             ]
           : []),
       ]);
@@ -723,6 +767,20 @@ export const respondToJoinRequest = async (req: Request, res: Response) => {
             ? `You’ve been accepted to "${project.name}" on UniHub`
             : `Update on your request for "${project.name}"`;
 
+        const html = buildRoleEmail(
+          'Participant',
+          subject,
+          normalizedDecision === 'approved'
+            ? `
+              <p class="paragraph">Good news! Your request to join <strong>${project.name}</strong> has been approved.</p>
+              <a href="${process.env.FRONTEND_URL || 'http://localhost:3000'}/participant/Feeds" class="btn">View My Projects</a>
+            `
+            : `
+              <p class="paragraph">Your request to join <strong>${project.name}</strong> was not approved at this time.</p>
+              <a href="${process.env.FRONTEND_URL || 'http://localhost:3000'}/participant/Feeds" class="btn">Explore Other Projects</a>
+            `,
+        );
+
         const text =
           normalizedDecision === 'approved'
             ? `Hi,\n\nGood news! Your request to join "${project.name}" has been approved.\n\nYou can now view project details and upcoming activities in UniHub.\n\n– UniHub Team`
@@ -731,6 +789,7 @@ export const respondToJoinRequest = async (req: Request, res: Response) => {
         await sendMail({
           to: createdNotification.recipientEmail,
           subject,
+          html,
           text,
         });
       } catch (emailError) {
@@ -883,9 +942,19 @@ export const joinActivity = async (req: Request, res: Response) => {
       try {
         const leaderEmail = await getProjectLeaderEmail(project.projectLeader);
         if (leaderEmail) {
+          const subject = `New participant joined "${activityTitle}"`;
+          const html = buildRoleEmail(
+            'Project Leader',
+            subject,
+            `
+              <p class="paragraph"><strong>${email}</strong> has joined your activity <strong>${activityTitle}</strong> in project <strong>${project.name}</strong>.</p>
+              <a href="${process.env.FRONTEND_URL || 'http://localhost:3000'}/project-leader/participants" class="btn">View Participants</a>
+            `,
+          );
           await sendMail({
             to: leaderEmail,
-            subject: `New participant joined "${activityTitle}"`,
+            subject,
+            html,
             text: `Hi,\n\n${email} has joined your activity "${activityTitle}" in project "${project.name}".\n\nYou can see all participants and manage attendance from your UniHub projects page.\n\n– UniHub Team`,
           });
         }
@@ -1042,9 +1111,18 @@ export const updateActivityRegistration = async (req: Request, res: Response) =>
       }
 
       if (updated.participantEmail) {
+        const subject = `Your attendance for "${activityTitle}" was marked as ${updated.status}`;
+        const html = buildBasicEmail(
+          subject,
+          `
+            <p class="paragraph">Your attendance for the activity <strong>${activityTitle}</strong> in project <strong>${project.name}</strong> was marked as <strong>${updated.status}</strong>.</p>
+            <a href="${process.env.FRONTEND_URL || 'http://localhost:3000'}/participant/Feeds" class="btn">View My Activities</a>
+          `,
+        );
         await sendMail({
           to: updated.participantEmail,
-          subject: `Your attendance for "${activityTitle}" was marked as ${updated.status}`,
+          subject,
+          html,
           text: `Hi,\n\nYour attendance for the activity "${activityTitle}" in project "${project.name}" was marked as ${updated.status}.\n\nIf you have any questions, please contact the project leader.\n\n– UniHub Team`,
         });
       }
@@ -1657,6 +1735,75 @@ export const upsertActivityEvaluation = async (req: Request, res: Response) => {
       { $set: update },
       { new: true, upsert: true },
     ).lean();
+
+    // Notify project leader (socket + email)
+    try {
+      // Derive activity title (best-effort) from proposal snapshot
+      let activityTitle = `Activity ${numericActivityId + 1}`;
+      try {
+        const proposal: any = (project as any).proposalData;
+        const trainingSnapshot = proposal && proposal['training-design'];
+        if (trainingSnapshot && Array.isArray(trainingSnapshot.editableCells)) {
+          const cells: string[] = trainingSnapshot.editableCells;
+          let indexCounter = 0;
+          for (let i = 0; i + 1 < cells.length; i += 2) {
+            const title = (cells[i] || '').trim();
+            if (!title) { continue; }
+            if (indexCounter === numericActivityId) { activityTitle = title; break; }
+            indexCounter += 1;
+          }
+        }
+      } catch (parseErr) {
+        console.error('Failed to derive activity title for upsertActivityEvaluation', parseErr);
+      }
+
+      const createdNotification = await Notification.create({
+        title: 'Activity evaluation submitted',
+        message: `${trimmedEmail} submitted an evaluation for "${activityTitle}"`,
+        project: project._id,
+      });
+
+      try {
+        const io = getIO();
+        io.emit('notification:new', {
+          id: createdNotification._id.toString(),
+          title: createdNotification.title,
+          message: createdNotification.message,
+          projectId: project._id.toString(),
+          timestamp: createdNotification.createdAt
+            ? createdNotification.createdAt.toLocaleString('en-PH', { dateStyle: 'medium', timeStyle: 'short' })
+            : '',
+          read: createdNotification.read,
+        });
+      } catch (socketError) {
+        console.error('Failed to emit evaluation submission notification over socket', socketError);
+      }
+
+      try {
+        const leaderEmail = await getProjectLeaderEmail(project.projectLeader);
+        if (leaderEmail) {
+          const subject = `New evaluation for "${activityTitle}"`;
+          const html = buildRoleEmail(
+            'Project Leader',
+            subject,
+            `
+              <p class="paragraph"><strong>${trimmedEmail}</strong> submitted an evaluation for <strong>${activityTitle}</strong> in project <strong>${(project as any).name || 'a project'}</strong>.</p>
+              <a href="${process.env.FRONTEND_URL || 'http://localhost:3000'}/project-leader/dashboard" class="btn">Review Evaluations</a>
+            `,
+          );
+          await sendMail({
+            to: leaderEmail,
+            subject,
+            html,
+            text: `${trimmedEmail} submitted an evaluation for "${activityTitle}" in project "${(project as any).name || 'a project'}".`,
+          });
+        }
+      } catch (emailErr) {
+        console.error('Failed to send evaluation submission email to project leader', emailErr);
+      }
+    } catch (notifyErr) {
+      console.error('Failed to notify leader about activity evaluation', notifyErr);
+    }
 
     return res.json({
       projectId: doc?.project?.toString() ?? id,

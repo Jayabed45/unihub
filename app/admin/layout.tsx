@@ -1,8 +1,9 @@
 'use client';
 
-import { ReactNode, useCallback, useEffect, useRef, useState } from 'react';
+import { ReactNode, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { io, type Socket } from 'socket.io-client';
 import { useRouter } from 'next/navigation';
+import Link from 'next/link';
 
 import Sidebar from './components/Sidebar';
 import HeaderBar from './components/HeaderBar';
@@ -23,6 +24,7 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
   const [isAuthorized, setIsAuthorized] = useState(false);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
   const [logoutProgress, setLogoutProgress] = useState(0);
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const [toastNotification, setToastNotification] = useState<NotificationItem | null>(null);
@@ -615,6 +617,42 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
         </div>
       )}
 
+      {/* Mobile navigation drawer */}
+      {mobileNavOpen && (
+        <div className="fixed inset-0 z-50 lg:hidden" role="dialog" aria-modal="true">
+          <div
+            className={`absolute inset-0 bg-black/40 transition-opacity duration-300 ${mobileNavOpen ? 'opacity-100' : 'opacity-0'}`}
+            onClick={() => setMobileNavOpen(false)}
+          />
+          <div
+            className={`absolute left-0 top-0 h-full w-full max-w-xs bg-white border-r border-amber-100 shadow-2xl transition-transform duration-300 ease-out ${
+              mobileNavOpen ? 'translate-x-0' : '-translate-x-full'
+            }`}
+          >
+            <div className="px-5 pt-6 pb-4">
+              <h2 className="text-xl font-bold text-gray-900">UniHub</h2>
+              <p className="mt-0.5 text-xs text-gray-500">Administrator</p>
+            </div>
+            <nav className="px-3 space-y-1">
+              {adminNavigation.map((item) => (
+                <Link
+                  key={item.name}
+                  href={item.href}
+                  onClick={() => setMobileNavOpen(false)}
+                  className="flex items-center gap-3 rounded-xl px-4 py-3 text-sm font-medium text-gray-700 hover:bg-amber-50"
+                >
+                  <item.icon className="h-5 w-5 text-amber-600" />
+                  <span>{item.name}</span>
+                </Link>
+              ))}
+            </nav>
+            <div className="p-4 mt-auto text-xs text-gray-400">
+              © {new Date().getFullYear()} UniHub Admin
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="sticky top-0 h-screen">
         <Sidebar items={adminNavigation} onLogout={handleLogout} logoutDisabled={isLoggingOut} />
       </div>
@@ -625,8 +663,30 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
           notificationsOpen={notificationsOpen}
           notificationsCount={notifications.filter((item) => !item.read).length}
           onOpenProfile={handleOpenProfile}
+          onOpenMobileNav={() => setMobileNavOpen(true)}
         />
-        <div className="mx-auto max-w-6xl px-6 py-10">{children}</div>
+        <Suspense
+          fallback={
+            <div className="mx-auto max-w-6xl px-6 py-10 space-y-6">
+              <div className="h-6 w-40 rounded-lg bg-amber-100 animate-pulse" />
+              <div className="h-4 w-72 rounded-lg bg-amber-50 animate-pulse" />
+              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                {Array.from({ length: 6 }).map((_, i) => (
+                  <div key={i} className="rounded-2xl border border-amber-100 bg-white p-4 shadow-sm">
+                    <div className="h-4 w-1/2 rounded bg-amber-100 animate-pulse" />
+                    <div className="mt-3 space-y-2">
+                      <div className="h-3 w-full rounded bg-amber-50 animate-pulse" />
+                      <div className="h-3 w-5/6 rounded bg-amber-50 animate-pulse" />
+                      <div className="h-3 w-2/3 rounded bg-amber-50 animate-pulse" />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          }
+        >
+          <div className="mx-auto max-w-6xl px-6 py-10">{children}</div>
+        </Suspense>
       </main>
 
       <NotificationsPanel

@@ -1,7 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { io, type Socket } from 'socket.io-client';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 
 interface JoinedActivity {
   projectId: string;
@@ -12,7 +11,7 @@ interface JoinedActivity {
   updatedAt?: string;
 }
 
-export default function ParticipantProjectsPage() {
+export default function ParticipantActivitiesPage() {
   const [participantEmail, setParticipantEmail] = useState<string | null>(null);
   const [activities, setActivities] = useState<JoinedActivity[]>([]);
   const [loading, setLoading] = useState(false);
@@ -20,7 +19,6 @@ export default function ParticipantProjectsPage() {
   const [sidePanelOpen, setSidePanelOpen] = useState(false);
   const [sidePanelProject, setSidePanelProject] = useState<{ projectId: string; projectName: string } | null>(null);
   const [sidePanelActivities, setSidePanelActivities] = useState<JoinedActivity[]>([]);
-  const socketRef = useRef<Socket | null>(null);
 
   const fetchJoinedActivities = useCallback(async () => {
     if (!participantEmail) return;
@@ -61,32 +59,6 @@ export default function ParticipantProjectsPage() {
     if (participantEmail) {
       fetchJoinedActivities();
     }
-  }, [participantEmail, fetchJoinedActivities]);
-
-  useEffect(() => {
-    if (!participantEmail) return;
-
-    const socket = io('http://localhost:5000', {
-      reconnectionAttempts: 3,
-      reconnectionDelay: 1000,
-    });
-    socketRef.current = socket;
-
-    const handleNotification = (payload: any) => {
-      if (!payload?.title || typeof payload.title !== 'string') return;
-      if (!payload.message?.includes(participantEmail)) return;
-      if (payload.title === 'Activity join') {
-        fetchJoinedActivities();
-      }
-    };
-
-    socket.on('notification:new', handleNotification);
-
-    return () => {
-      socket.off('notification:new', handleNotification);
-      socket.disconnect();
-      socketRef.current = null;
-    };
   }, [participantEmail, fetchJoinedActivities]);
 
   const groupedByProject = useMemo(() => {
@@ -252,7 +224,7 @@ const StatusBadge = ({ status }: { status: 'registered' | 'present' | 'absent' }
       text: 'Marked absent', 
       className: 'border-red-200 bg-red-50 text-red-700' 
     }
-  };
+  } as const;
 
   return (
     <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-medium whitespace-nowrap ${statusConfig[status].className}`}>

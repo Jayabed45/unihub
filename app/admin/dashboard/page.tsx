@@ -158,8 +158,62 @@ export default function AdminDashboardPage() {
 
   if (loading) {
     return (
-      <div className="flex min-h-[40vh] items-center justify-center rounded-3xl border border-amber-100 bg-white/80 p-10 text-sm text-gray-700">
-        Loading dashboard…
+      <div className="space-y-8">
+        <section className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <div key={i} className="flex items-center justify-between gap-3 rounded-2xl border border-amber-100 bg-white/80 px-4 py-3 shadow-sm">
+              <div className="flex items-center gap-3">
+                <div className="h-9 w-9 rounded-full bg-amber-100 animate-pulse" />
+                <div>
+                  <div className="h-3 w-24 rounded bg-amber-100 animate-pulse" />
+                  <div className="mt-2 h-5 w-16 rounded bg-amber-50 animate-pulse" />
+                </div>
+              </div>
+              <div className="hidden h-6 w-24 rounded bg-amber-50 animate-pulse sm:block" />
+            </div>
+          ))}
+        </section>
+
+        <section className="grid gap-6 lg:grid-cols-3">
+          <div className="rounded-2xl border border-amber-100 bg-white/80 p-6 lg:col-span-1">
+            <div className="mb-4">
+              <div className="h-4 w-32 rounded bg-amber-100 animate-pulse" />
+              <div className="mt-2 h-3 w-48 rounded bg-amber-50 animate-pulse" />
+            </div>
+            <div className="mx-auto h-40 w-40 rounded-full bg-amber-50 animate-pulse" />
+            <div className="mt-4 grid grid-cols-2 gap-2">
+              {Array.from({ length: 4 }).map((_, i) => (
+                <div key={i} className="h-3 w-full rounded bg-amber-50 animate-pulse" />
+              ))}
+            </div>
+          </div>
+          <div className="rounded-2xl border border-amber-100 bg-white/80 p-6 lg:col-span-2">
+            <div className="mb-4">
+              <div className="h-4 w-32 rounded bg-amber-100 animate-pulse" />
+              <div className="mt-2 h-3 w-48 rounded bg-amber-50 animate-pulse" />
+            </div>
+            <div className="space-y-3">
+              {Array.from({ length: 2 }).map((_, i) => (
+                <div key={i} className="h-4 w-full rounded bg-amber-50 animate-pulse" />
+              ))}
+            </div>
+          </div>
+        </section>
+
+        <section className="grid gap-6 lg:grid-cols-2">
+          {Array.from({ length: 2 }).map((_, i) => (
+            <div key={i} className="rounded-2xl border border-amber-100 bg-white/80 p-6">
+              <div className="mb-3 flex items-center justify-between">
+                <div className="h-4 w-40 rounded bg-amber-100 animate-pulse" />
+              </div>
+              <div className="space-y-2">
+                {Array.from({ length: 5 }).map((_, j) => (
+                  <div key={j} className="h-5 w-full rounded bg-amber-50 animate-pulse" />
+                ))}
+              </div>
+            </div>
+          ))}
+        </section>
       </div>
     );
   }

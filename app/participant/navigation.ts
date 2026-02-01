@@ -8,10 +8,10 @@ export const participantNavigation = [
     href: '/participant/Feeds',
   },
   {
-    name: 'Projects',
-    description: 'Browse and join approved projects and activities.',
+    name: 'Activities',
+    description: 'Browse and manage the activities you can join under projects.',
     icon: FolderKanban,
-    href: '/participant/Projects',
+    href: '/participant/activities',
   },
 ] as const;
 

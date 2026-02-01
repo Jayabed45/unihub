@@ -4,6 +4,7 @@ import jwt from 'jsonwebtoken';
 import User from '../models/User';
 import Role from '../models/Role'; // Explicitly import Role
 import { sendMail } from '../utils/mailer';
+import { buildBasicEmail } from '../services/email.service';
 
 const generateVerificationCode = (): string => {
   const code = Math.floor(100000 + Math.random() * 900000);
@@ -69,9 +70,21 @@ export const login = async (req: Request, res: Response) => {
 
         try {
           if (user.email) {
+            const subject = 'Your UniHub verification code';
+            const html = buildBasicEmail(
+              subject,
+              `
+                <p class="paragraph">Use the verification code below to continue signing in.</p>
+                <p class="paragraph"><span class="pill" style="display:inline-block; padding:6px 10px; border-radius:9999px; background:#111827; color:#f8fafc; font-size:14px; font-weight:700; letter-spacing:0.08em;">${code}</span></p>
+                <p class="paragraph muted" style="color:#6b7280;">This code expires in 15 minutes.</p>
+                <div style="height:8px"></div>
+                <a href="${process.env.FRONTEND_URL || 'http://localhost:3000'}" class="btn">Open UniHub</a>
+              `,
+            );
             await sendMail({
               to: user.email,
-              subject: 'Your UniHub verification code',
+              subject,
+              html,
               text: `Your UniHub verification code is ${code}. It will expire in 15 minutes. If you did not attempt to sign in, you can ignore this email.`,
             });
           }
@@ -334,9 +347,21 @@ export const register = async (req: Request, res: Response) => {
       (user as any).emailVerificationExpires = expires;
 
       try {
+        const subject = 'Verify your UniHub email';
+        const html = buildBasicEmail(
+          subject,
+          `
+            <p class="paragraph">Welcome to UniHub! Use the verification code below to complete your first sign-in.</p>
+            <p class="paragraph"><span class="pill" style="display:inline-block; padding:6px 10px; border-radius:9999px; background:#111827; color:#f8fafc; font-size:14px; font-weight:700; letter-spacing:0.08em;">${code}</span></p>
+            <p class="paragraph muted" style="color:#6b7280;">This code expires in 15 minutes.</p>
+            <div style="height:8px"></div>
+            <a href="${process.env.FRONTEND_URL || 'http://localhost:3000'}" class="btn">Open UniHub</a>
+          `,
+        );
         await sendMail({
           to: normalizedEmail,
-          subject: 'Verify your UniHub email',
+          subject,
+          html,
           text: `Welcome to UniHub! Your verification code is ${code}. It will expire in 15 minutes. Use this code the first time you sign in.`,
         });
       } catch (mailError) {

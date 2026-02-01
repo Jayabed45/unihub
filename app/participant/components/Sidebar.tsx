@@ -35,6 +35,7 @@ export default function Sidebar<T extends SidebarItem>({ items, onLogout, logout
             <Link
               key={item.name}
               href={item.href}
+              prefetch={false}
               className={clsx(
                 'group flex w-full items-center gap-3 rounded-xl px-4 py-3 text-sm font-medium transition-all',
                 isActive

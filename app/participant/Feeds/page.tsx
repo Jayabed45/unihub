@@ -1,7 +1,6 @@
 'use client';
 
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
-import { io, type Socket } from 'socket.io-client';
 
 interface ParticipantProject {
   _id: string;
@@ -323,7 +322,7 @@ export default function ParticipantFeedsPage() {
   >(null);
   const reminderTimeoutsRef = useRef<number[]>([]);
   const [nowMs, setNowMs] = useState(() => Date.now());
-  const socketRef = useRef<Socket | null>(null);
+  
 
   const fetchProjects = async () => {
     setLoading(true);
@@ -683,86 +682,7 @@ export default function ParticipantFeedsPage() {
     };
   }, [joinedActivitiesMeta, participantEmail]);
 
-  useEffect(() => {
-    const socket = io('http://localhost:5000');
-    socketRef.current = socket;
-
-    socket.on('notification:new', (payload: any) => {
-      if (!payload || typeof payload.title !== 'string') {
-        return;
-      }
-
-      const title = payload.title;
-      const message: string | undefined = (payload as any).message;
-      const projectIdFromPayload: string | undefined = (payload as any).projectId;
-      const recipientEmailFromPayload: string | undefined = (payload as any).recipientEmail;
-
-      if (title === 'New project created' || title === 'Project approved') {
-        fetchProjects();
-        return;
-      }
-
-      let currentEmail = participantEmail;
-      if (!currentEmail) {
-        try {
-          const stored = window.localStorage.getItem('unihub-auth');
-          if (stored) {
-            const parsed = JSON.parse(stored) as { email?: string } | null;
-            if (parsed?.email && typeof parsed.email === 'string') {
-              currentEmail = parsed.email;
-            }
-          }
-        } catch {
-          // ignore storage read errors for realtime updates
-        }
-      }
-
-      const isScheduleUpdate = title === 'Activity schedule updated';
-
-      if (!isScheduleUpdate) {
-        if (!message || !currentEmail || !message.includes(currentEmail)) {
-          return;
-        }
-      } else {
-        // For schedule updates, rely on recipientEmail from payload when available
-        if (recipientEmailFromPayload && currentEmail && recipientEmailFromPayload !== currentEmail) {
-          return;
-        }
-      }
-
-      if (
-        title === 'Join request' ||
-        title === 'Join request approved' ||
-        title === 'Activity join' ||
-        title === 'Activity schedule updated'
-      ) {
-        fetchPendingFromNotifications();
-        fetchJoinedActivities();
-
-        // If the participant currently has the activities drawer open for this project,
-        // refresh the list so schedule/location changes appear in real time.
-        if (
-          title === 'Activity schedule updated' &&
-          activitiesModalOpen &&
-          activitiesModalProject &&
-          projectIdFromPayload &&
-          activitiesModalProject._id === projectIdFromPayload
-        ) {
-          const project = projects.find((p) => p._id === projectIdFromPayload);
-          if (project) {
-            openActivitiesModal(project).catch(() => {
-              // best-effort only
-            });
-          }
-        }
-      }
-    });
-
-    return () => {
-      socket.disconnect();
-      socketRef.current = null;
-    };
-  }, []);
+  
 
   const approvedProjects = projects.filter((project) => project.status === 'Approved');
 

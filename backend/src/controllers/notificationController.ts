@@ -8,9 +8,16 @@ import { generateEmailHtml } from '../services/email.service';
 
 export const listNotifications = async (req: Request, res: Response) => {
   try {
-    const { leaderId, leaderEmail } = req.query as { leaderId?: string; leaderEmail?: string };
+    const { leaderId, leaderEmail, email } = req.query as { leaderId?: string; leaderEmail?: string; email?: string };
 
     let filter: Record<string, any> = {};
+
+    // Participant-specific: if a specific email is provided, restrict to notifications addressed to that email
+    if (email && typeof email === 'string' && email.trim()) {
+      filter = { recipientEmail: email.trim() };
+      const notifications = await Notification.find(filter).sort({ createdAt: -1 }).limit(50).lean();
+      return res.json(notifications);
+    }
 
     if ((leaderId && leaderId.trim()) || (leaderEmail && leaderEmail.trim())) {
       const orFilters: any[] = [];

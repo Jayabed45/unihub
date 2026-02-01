@@ -1,8 +1,8 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { usePathname } from 'next/navigation';
-import { Bell, Clock, Search, UserCircle2 } from 'lucide-react';
+import { usePathname, useRouter } from 'next/navigation';
+import { Bell, Clock, Search, UserCircle2, Menu } from 'lucide-react';
 
 import { projectLeaderNavigation } from '../navigation';
 
@@ -25,6 +25,7 @@ interface HeaderBarProps {
   notificationsCount?: number;
   notificationsOpen?: boolean;
   onOpenProfile?: () => void;
+  onOpenMobileNav?: () => void;
 }
 
 export default function HeaderBar({
@@ -32,9 +33,12 @@ export default function HeaderBar({
   notificationsCount = 0,
   notificationsOpen,
   onOpenProfile,
+  onOpenMobileNav,
 }: HeaderBarProps) {
   const pathname = usePathname();
+  const router = useRouter();
   const [now, setNow] = useState(() => new Date());
+  const [query, setQuery] = useState('');
 
   useEffect(() => {
     const interval = window.setInterval(() => {
@@ -59,12 +63,54 @@ export default function HeaderBar({
 
   return (
     <header className="sticky top-0 z-30 border-b border-yellow-100 bg-white/80 backdrop-blur">
-      <div className="mx-auto flex max-w-6xl items-center justify-between gap-6 px-6 py-4">
-        <div className="min-w-0 flex-1">
-          <h1 className="truncate text-2xl font-semibold text-gray-900">{title}</h1>
+      <div className="mx-auto max-w-6xl px-4 sm:px-6 py-3 sm:py-4">
+        {/* Mobile header */}
+        <div className="flex items-center justify-between gap-3 lg:hidden">
+          <div className="flex items-center gap-3 min-w-0">
+            <button
+              type="button"
+              onClick={onOpenMobileNav}
+              aria-label="Open navigation"
+              className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-yellow-100 bg-white text-yellow-600 shadow-sm"
+            >
+              <Menu className="h-5 w-5" />
+            </button>
+            <h1 className="truncate text-lg font-semibold text-gray-900">{title}</h1>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={onToggleNotifications}
+              className={`relative flex h-9 w-9 items-center justify-center rounded-full border border-yellow-100 bg-white text-yellow-500 ${
+                notificationsOpen ? 'ring-2 ring-yellow-300' : ''
+              }`}
+              aria-label="Notifications"
+            >
+              <Bell className="h-4 w-4" />
+              {notificationsCount > 0 && (
+                <span className="absolute -top-1 -right-1 inline-flex h-4 min-w-[1rem] items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-semibold text-white">
+                  {notificationsCount}
+                </span>
+              )}
+            </button>
+            <button
+              type="button"
+              onClick={onOpenProfile}
+              className="flex h-9 w-9 items-center justify-center rounded-full border border-yellow-100 bg-white text-yellow-500"
+              aria-label="Your profile"
+            >
+              <UserCircle2 className="h-5 w-5" />
+            </button>
+          </div>
         </div>
 
-        <div className="hidden items-center gap-6 text-sm lg:flex">
+        {/* Desktop header */}
+        <div className="hidden items-center justify-between gap-6 lg:flex">
+          <div className="min-w-0 flex-1">
+            <h1 className="truncate text-2xl font-semibold text-gray-900">{title}</h1>
+          </div>
+
+          <div className="hidden items-center gap-6 text-sm lg:flex">
           <label className="relative w-80 max-w-xs">
             <span className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-gray-400">
               <Search className="h-4 w-4" />
@@ -72,6 +118,17 @@ export default function HeaderBar({
             <input
               type="search"
               placeholder="Search projects, participants, announcements..."
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  const q = query.trim();
+                  if (!q) return;
+                  let target = '/project-leader/projects';
+                  if (pathname?.startsWith('/project-leader/participants')) target = '/project-leader/participants';
+                  router.push(`${target}?search=${encodeURIComponent(q)}`);
+                }
+              }}
               className="w-full rounded-full border border-yellow-100 bg-white/70 py-3 pe-4 ps-11 text-sm text-gray-700 shadow-inner transition focus:border-yellow-300 focus:outline-none focus:ring-2 focus:ring-yellow-200"
             />
           </label>
@@ -107,6 +164,7 @@ export default function HeaderBar({
             >
               <UserCircle2 className="h-5 w-5" />
             </button>
+          </div>
           </div>
         </div>
       </div>
