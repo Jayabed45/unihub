@@ -1717,6 +1717,30 @@ export default function ProjectLeaderProjectsPage() {
     }
   }, [panelMode, panelVisible, viewProjectData]);
 
+  useEffect(() => {
+    if (!panelRef.current) return;
+    if (!panelVisible) return;
+    if (!viewProjectData) return;
+    if (!(panelMode === 'review' || panelMode === 'edit')) return;
+
+    try {
+      const proposal: any = (viewProjectData as any).proposalData;
+      if (!proposal || typeof proposal !== 'object') return;
+
+      for (const section of proposalSections) {
+        const snapshot = proposal[section.id];
+        const container = panelRef.current.querySelector<HTMLElement>(
+          `[data-section-id="${section.id}"]`,
+        );
+        if (container && snapshot && typeof snapshot.htmlContent === 'string') {
+          container.innerHTML = snapshot.htmlContent;
+        }
+      }
+    } catch (err) {
+      // ignore hydration errors
+    }
+  }, [viewProjectData, panelVisible, panelMode, proposalSections]);
+
   const handleDeleteProject = async (projectId: string) => {
     const confirmed = window.confirm('Are you sure you want to delete this project? This action cannot be undone.');
     if (!confirmed) return;
