@@ -577,10 +577,22 @@ export default function ParticipantFeedsPage() {
       const hasEnd = Number.isFinite(endMs);
 
       if (hasStart && startMs > now) {
+        const oneDayBefore = startMs - 24 * 60 * 60 * 1000;
+        const oneHourBefore = startMs - 60 * 60 * 1000;
         const thirtyMinutesBefore = startMs - 30 * 60 * 1000;
         const tenMinutesBefore = startMs - 10 * 60 * 1000;
 
         const events: Array<{ at: number; type: 'prestart' | 'start'; message: string }> = [
+          {
+            at: oneDayBefore,
+            type: 'prestart',
+            message: 'This activity will start in about 1 day.',
+          },
+          {
+            at: oneHourBefore,
+            type: 'prestart',
+            message: 'This activity will start in about 1 hour.',
+          },
           {
             at: thirtyMinutesBefore,
             type: 'prestart',

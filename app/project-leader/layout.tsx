@@ -32,6 +32,7 @@ export default function ProjectLeaderLayout({ children }: { children: ReactNode 
   const previousNotificationIdsRef = useRef<string[]>([]);
   const initialNotificationsLoadedRef = useRef(false);
   const socketRef = useRef<Socket | null>(null);
+  const reminderTimeoutsRef = useRef<number[]>([]);
   const [profileOpen, setProfileOpen] = useState(false);
   const [profileSlideIn, setProfileSlideIn] = useState(false);
   const [profileOverlayIn, setProfileOverlayIn] = useState(false);
@@ -47,6 +48,26 @@ export default function ProjectLeaderLayout({ children }: { children: ReactNode 
   const [pwdSaving, setPwdSaving] = useState(false);
   const [pwdError, setPwdError] = useState<string | null>(null);
   const [pwdSuccess, setPwdSuccess] = useState<string | null>(null);
+
+  const [leaderEmail, setLeaderEmail] = useState<string | null>(null);
+  const [leaderId, setLeaderId] = useState<string | null>(null);
+  const [activityReminder, setActivityReminder] = useState<
+    | { type: 'prestart' | 'start'; projectName: string; activityTitle: string; message: string }
+    | null
+  >(null);
+
+  const createReminderNotification = useCallback(
+    async (title: string, message: string, projectId?: string) => {
+      try {
+        await fetch('http://localhost:5000/api/notifications', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ title, message, project: projectId, recipientEmail: leaderEmail || undefined }),
+        });
+      } catch {}
+    },
+    [leaderEmail],
+  );
 
   const handleLogout = useCallback(() => {
     if (isLoggingOut) return;
@@ -248,12 +269,109 @@ export default function ProjectLeaderLayout({ children }: { children: ReactNode 
       }
 
       setIsAuthorized(true);
+      if (parsed.email && typeof parsed.email === 'string') setLeaderEmail(parsed.email);
+      if (parsed.id) setLeaderId(parsed.id);
     } catch (error) {
       console.error('Failed to verify project leader access', error);
       window.localStorage.removeItem(STORAGE_KEY);
       router.replace('/');
     }
   }, [router]);
+
+  useEffect(() => {
+    return () => {
+      reminderTimeoutsRef.current.forEach((id) => window.clearTimeout(id));
+      reminderTimeoutsRef.current = [];
+    };
+  }, []);
+
+  useEffect(() => {
+    const setupReminders = async () => {
+      if (!leaderId) return;
+
+      reminderTimeoutsRef.current.forEach((id) => window.clearTimeout(id));
+      reminderTimeoutsRef.current = [];
+
+      try {
+        const params = new URLSearchParams();
+        params.append('projectLeaderId', leaderId);
+        const res = await fetch(`http://localhost:5000/api/projects?${params.toString()}`);
+        if (!res.ok) return;
+        const projects: Array<{ _id: string; name?: string }> = await res.json();
+
+        const now = Date.now();
+
+        for (const p of projects) {
+          try {
+            const detailRes = await fetch(`http://localhost:5000/api/projects/${p._id}`);
+            if (!detailRes.ok) continue;
+            const detail: any = await detailRes.json();
+
+            const projectName: string = (detail?.name || 'Untitled project') as string;
+            const schedule: Array<{ activityId: number; startAt?: string; endAt?: string }> = Array.isArray(
+              detail?.activitySchedule,
+            )
+              ? detail.activitySchedule.map((item: any) => ({
+                  activityId: Number(item.activityId),
+                  startAt: item.startAt,
+                  endAt: item.endAt,
+                }))
+              : [];
+
+            let titles: Record<number, string> = {};
+            try {
+              const td = detail?.proposalData?.['training-design'];
+              if (td && Array.isArray(td.editableCells)) {
+                const cells: string[] = td.editableCells;
+                let idx = 0;
+                for (let i = 0; i + 1 < cells.length; i += 2) {
+                  const title = (cells[i] || '').trim();
+                  if (title) {
+                    titles[idx] = title;
+                  }
+                  idx += 1;
+                }
+              }
+            } catch {}
+
+            for (const entry of schedule) {
+              const startMs = entry.startAt ? new Date(entry.startAt).getTime() : NaN;
+              if (!Number.isFinite(startMs) || startMs <= now) continue;
+
+              const activityTitle = titles[entry.activityId] || `Activity ${entry.activityId + 1}`;
+
+              const events: Array<{ at: number; type: 'prestart' | 'start'; message: string; title: string }> = [];
+              const oneDayBefore = startMs - 24 * 60 * 60 * 1000;
+              const oneHourBefore = startMs - 60 * 60 * 1000;
+              const thirtyMinutesBefore = startMs - 30 * 60 * 1000;
+              const tenMinutesBefore = startMs - 10 * 60 * 1000;
+
+              events.push({ at: oneDayBefore, type: 'prestart', message: 'This activity will start in about 1 day.', title: 'Activity Starting Soon' });
+              events.push({ at: oneHourBefore, type: 'prestart', message: 'This activity will start in about 1 hour.', title: 'Activity Starting Soon' });
+              events.push({ at: thirtyMinutesBefore, type: 'prestart', message: 'This activity will start in about 30 minutes.', title: 'Activity Starting Soon' });
+              events.push({ at: tenMinutesBefore, type: 'prestart', message: 'This activity will start in about 10 minutes.', title: 'Activity Starting Soon' });
+              events.push({ at: startMs, type: 'start', message: 'This activity is starting now.', title: 'Activity Started' });
+
+              for (const ev of events) {
+                if (ev.at <= now) continue;
+                const id = window.setTimeout(() => {
+                  setActivityReminder({ type: ev.type, projectName, activityTitle, message: ev.message });
+                  createReminderNotification(
+                    ev.title,
+                    `[${projectName}] ${activityTitle}: ${ev.message}`,
+                    p._id,
+                  );
+                }, ev.at - now);
+                reminderTimeoutsRef.current.push(id);
+              }
+            }
+          } catch {}
+        }
+      } catch {}
+    };
+
+    setupReminders();
+  }, [leaderId, createReminderNotification]);
 
   useEffect(() => {
     const fetchNotifications = async () => {
@@ -739,6 +857,24 @@ export default function ProjectLeaderLayout({ children }: { children: ReactNode 
         onClear={() => setNotifications([])}
         onNotificationClick={handleNotificationClick}
       />
+
+      {activityReminder && (
+        <div className="fixed inset-0 z-70 flex h-screen items-center justify-center bg-black/50 px-4" role="dialog" aria-modal="true">
+          <div className="w-full max-w-md rounded-2xl border border-yellow-100 bg-white p-6 text-sm text-gray-800 shadow-2xl">
+            <div className="mb-3 flex items-start justify-between gap-3">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wide text-yellow-500">Activity reminder</p>
+                <h3 className="mt-1 text-base font-semibold text-gray-900 line-clamp-2">{activityReminder.activityTitle}</h3>
+                <p className="mt-0.5 text-[11px] text-gray-600 line-clamp-1">Project: {activityReminder.projectName}</p>
+              </div>
+            </div>
+            <p className="text-sm text-gray-700">{activityReminder.message}</p>
+            <div className="mt-4 flex items-center justify-end">
+              <button type="button" onClick={() => setActivityReminder(null)} className="rounded-full bg-yellow-500 px-4 py-1.5 text-xs font-semibold text-white shadow hover:bg-yellow-600">OK</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {toastNotification && (
         <div className="pointer-events-none fixed bottom-6 right-6 z-40 flex max-w-sm flex-col gap-2 text-sm text-gray-900">
