@@ -148,6 +148,9 @@ export default function ParticipantFeedsPage() {
   const [activityJoinLoading, setActivityJoinLoading] = useState(false);
   const [activityJoinError, setActivityJoinError] = useState<string | null>(null);
   const [activityJoinStatusByKey, setActivityJoinStatusByKey] = useState<Record<string, 'joined'>>({});
+  const [activitiesByProjectId, setActivitiesByProjectId] = useState<Record<string, ProjectActivity[]>>({});
+  const [activitiesFilter, setActivitiesFilter] = useState<null | 'upcoming' | 'ongoing' | 'ended'>(null);
+  const [evaluatedStatusByKey, setEvaluatedStatusByKey] = useState<Record<string, 'evaluated'>>({});
   const [joinedActivitiesMeta, setJoinedActivitiesMeta] = useState<
     Record<
       string,
@@ -199,6 +202,89 @@ export default function ParticipantFeedsPage() {
       console.error('Failed to create reminder notification', error);
     }
   };
+
+  const loadActivitiesForJoinedProjects = async () => {
+    const joinedIds = Object.entries(joinedStatusByProject)
+      .filter(([, v]) => v === 'joined')
+      .map(([k]) => k);
+
+    for (const projectId of joinedIds) {
+      if (activitiesByProjectId[projectId]) continue;
+      try {
+        const res = await fetch(`http://localhost:5000/api/projects/${projectId}`);
+        if (!res.ok) continue;
+        const data = (await res.json()) as any;
+        const trainingSnapshot = data && data.proposalData && data.proposalData['training-design'];
+
+        let parsed: ProjectActivity[] = [];
+
+        const schedule: Array<{ activityId: number; startAt?: string; endAt?: string; location?: string | null }> =
+          Array.isArray((data as any)?.activitySchedule)
+            ? (((data as any).activitySchedule as any[]) || []).map((item) => ({
+                activityId: Number((item as any).activityId),
+                startAt: (item as any).startAt as string | undefined,
+                endAt: (item as any).endAt as string | undefined,
+                location: typeof (item as any).location === 'string' ? ((item as any).location as string) : undefined,
+              }))
+            : [];
+
+        if (trainingSnapshot && Array.isArray(trainingSnapshot.editableCells)) {
+          const cells: string[] = trainingSnapshot.editableCells;
+          let activityIndexCounter = 0;
+          for (let i = 0; i + 1 < cells.length; i += 2) {
+            const title = (cells[i] || '').trim();
+            const resourcePerson = (cells[i + 1] || '').trim();
+            if (!title) continue;
+            const scheduleEntry = schedule.find((item) => item.activityId === activityIndexCounter);
+            parsed.push({
+              activityId: activityIndexCounter,
+              title,
+              resourcePerson: resourcePerson || undefined,
+              startAt: scheduleEntry?.startAt ?? null,
+              endAt: scheduleEntry?.endAt ?? null,
+              location: scheduleEntry?.location ?? null,
+            });
+            activityIndexCounter += 1;
+          }
+        }
+
+        try {
+          const existingExt: Array<{ topic?: string; hours?: number | null; resourcePerson?: string }> =
+            Array.isArray((data as any)?.extensionActivities) ? (data as any).extensionActivities : [];
+          if (existingExt.length > 0) {
+            let nextActivityId = parsed.length
+              ? parsed.reduce((max, item) => (item.activityId > max ? item.activityId : max), parsed[0].activityId) + 1
+              : 0;
+            existingExt.forEach((item, index) => {
+              const rawTopic = typeof item.topic === 'string' ? item.topic.trim() : '';
+              const title = rawTopic || `Extension activity ${index + 1}`;
+              if (!title) return;
+              const resourcePerson =
+                typeof item.resourcePerson === 'string' && item.resourcePerson.trim()
+                  ? item.resourcePerson.trim()
+                  : undefined;
+              const scheduleEntry = schedule.find((entry) => entry.activityId === nextActivityId);
+              parsed.push({
+                activityId: nextActivityId,
+                title,
+                resourcePerson,
+                startAt: scheduleEntry?.startAt ?? null,
+                endAt: scheduleEntry?.endAt ?? null,
+                location: scheduleEntry?.location ?? null,
+              });
+              nextActivityId += 1;
+            });
+          }
+        } catch {}
+
+        setActivitiesByProjectId((prev) => ({ ...prev, [projectId]: parsed }));
+      } catch {}
+    }
+  };
+
+  useEffect(() => {
+    loadActivitiesForJoinedProjects();
+  }, [joinedStatusByProject]);
 
   const openSurveyForMeta = (meta: {
     projectId: string;
@@ -302,6 +388,10 @@ export default function ParticipantFeedsPage() {
         return;
       }
 
+      // mark evaluated for this activity
+      const key = `${surveyProjectId}:${surveyActivityId}`;
+      setEvaluatedStatusByKey((prev) => ({ ...prev, [key]: 'evaluated' }));
+
       setSurveyModalOpen(false);
     } catch (error) {
       console.error('Failed to submit activity evaluation', error);
@@ -358,6 +448,34 @@ export default function ParticipantFeedsPage() {
       window.clearInterval(id);
     };
   }, []);
+
+  // When viewing an ended activity, check if the participant has already submitted an evaluation
+  useEffect(() => {
+    if (!activityDetailOpen || !activitiesModalProject || activityDetailIndex === null) return;
+    if (!participantEmail) return;
+    const key = `${activitiesModalProject._id}:${activityDetailIndex}`;
+    if (evaluatedStatusByKey[key] === 'evaluated') return;
+
+    const activity = activitiesForModal.find((a) => a.activityId === activityDetailIndex);
+    if (!activity || !activity.endAt) return;
+
+    // Only check for ended activities
+    const d = new Date(activity.endAt);
+    if (Number.isNaN(d.getTime()) || d.getTime() > Date.now()) return;
+
+    fetch(
+      `http://localhost:5000/api/projects/${encodeURIComponent(
+        activitiesModalProject._id,
+      )}/activities/${activityDetailIndex}/evaluations?email=${encodeURIComponent(participantEmail)}`,
+    )
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (Array.isArray(data) && data.length > 0) {
+          setEvaluatedStatusByKey((prev) => ({ ...prev, [key]: 'evaluated' }));
+        }
+      })
+      .catch(() => {});
+  }, [activityDetailOpen, activitiesModalProject, activityDetailIndex, participantEmail]);
 
   useEffect(() => {
     fetchProjects();
@@ -698,7 +816,7 @@ export default function ParticipantFeedsPage() {
 
   const approvedProjects = projects.filter((project) => project.status === 'Approved');
 
-  const openActivitiesModal = async (project: ParticipantProject) => {
+  const openActivitiesModal = async (project: ParticipantProject, filter: null | 'upcoming' | 'ongoing' | 'ended' = null) => {
     try {
       const res = await fetch(`http://localhost:5000/api/projects/${project._id}`);
       if (!res.ok) {
@@ -785,6 +903,7 @@ export default function ParticipantFeedsPage() {
 
       setActivitiesForModal(parsed);
       setActivitiesModalProject(project);
+      setActivitiesFilter(filter);
       setActivitiesModalOpen(true);
     } catch (e) {
       console.error('Failed to load activities for participant view', e);
@@ -1057,6 +1176,7 @@ export default function ParticipantFeedsPage() {
                   setActivitiesModalOpen(false);
                   setActivitiesModalProject(null);
                   setActivitiesForModal([]);
+                  setActivitiesFilter(null);
                 }}
                 className="rounded-full border border-yellow-200 px-3 py-1 text-xs font-semibold text-yellow-700 hover:bg-yellow-50"
               >
@@ -1069,8 +1189,34 @@ export default function ParticipantFeedsPage() {
                   There are no competencies / topics listed yet for this project.
                 </p>
               ) : (
+                <>
+                {activitiesFilter && (
+                  <div className="mb-3 text-[11px] text-gray-600">
+                    Showing: <span className="font-semibold capitalize">{activitiesFilter}</span>
+                  </div>
+                )}
                 <ul className="space-y-2 text-sm text-gray-800">
-                  {activitiesForModal.map((activity, index) => {
+                  {activitiesForModal
+                    .filter((activity) => {
+                      if (!activitiesFilter) return true;
+                      const now = nowMs;
+                      const startDate = activity.startAt ? new Date(activity.startAt) : undefined;
+                      const endDate = activity.endAt ? new Date(activity.endAt) : undefined;
+                      const hasValidStart = !!startDate && !Number.isNaN(startDate.getTime());
+                      const hasValidEnd = !!endDate && !Number.isNaN(endDate.getTime());
+                      const isExpired = hasValidEnd && endDate!.getTime() < now;
+                      const isOngoing = hasValidStart && hasValidEnd && startDate!.getTime() <= now && now <= endDate!.getTime();
+                      const isUpcoming = hasValidStart && !isOngoing && !isExpired && startDate!.getTime() > now;
+                      if (activitiesFilter === 'upcoming') return isUpcoming; // show all upcoming
+                      // for ended and ongoing, show only those the participant joined
+                      const projectId = activitiesModalProject?._id;
+                      const key = projectId !== undefined && activity.activityId !== undefined ? `${projectId}:${activity.activityId}` : undefined;
+                      const joined = !!(key && activityJoinStatusByKey[key] === 'joined');
+                      if (activitiesFilter === 'ongoing') return isOngoing && joined;
+                      if (activitiesFilter === 'ended') return isExpired && joined;
+                      return true;
+                    })
+                    .map((activity, index) => {
                   const joinedKey =
                     activitiesModalProject && activity.activityId !== null && activity.activityId !== undefined
                       ? `${activitiesModalProject._id}:${activity.activityId}`
@@ -1156,6 +1302,7 @@ export default function ParticipantFeedsPage() {
                   );
                 })}
                 </ul>
+                </>
               )}
             </div>
           </div>
@@ -1245,7 +1392,7 @@ export default function ParticipantFeedsPage() {
                 </p>
               )}
 
-              <div className="flex items-center justify-end gap-2 text-xs">
+              <div className="flex items-baseline justify-end gap-2 text-xs">
                 <button
                   type="button"
                   onClick={() => {
@@ -1259,63 +1406,112 @@ export default function ParticipantFeedsPage() {
                   Not now
                 </button>
                 {activityDetailActivity.startAt || activityDetailActivity.endAt ? (
-                  <button
-                  type="button"
-                  disabled={activityJoinLoading ||
-                    !participantEmail ||
-                    (activitiesModalProject &&
-                      activityDetailIndex !== null &&
-                      activityJoinStatusByKey[`${activitiesModalProject._id}:${activityDetailIndex}`] === 'joined') ||
-                    activityDetailIsExpired}
-                  onClick={async () => {
-                    if (!participantEmail) {
-                      setActivityJoinError('Your email could not be detected. Please sign out and log in again.');
-                      return;
-                    }
-                    if (!activitiesModalProject || activityDetailIndex === null) {
-                      setActivityJoinError('Activity information is missing. Please close and reopen this project.');
-                      return;
-                    }
-
-                    const key = `${activitiesModalProject._id}:${activityDetailIndex}`;
-
-                    try {
-                      setActivityJoinLoading(true);
-                      setActivityJoinError(null);
-
-                      const res = await fetch(
-                        `http://localhost:5000/api/projects/${activitiesModalProject._id}/activities/${activityDetailIndex}/join`,
-                        {
-                          method: 'POST',
-                          headers: {
-                            'Content-Type': 'application/json',
-                          },
-                          body: JSON.stringify({ email: participantEmail }),
-                        },
-                      );
-
-                      if (!res.ok) {
-                        const data = await res.json().catch(() => ({}));
-                        throw new Error(data.message || 'Failed to join activity');
+                  activityDetailIsExpired ? (
+                    (() => {
+                      const canRate = !!(activitiesModalProject && activityDetailIndex !== null &&
+                        activityJoinStatusByKey[`${activitiesModalProject._id}:${activityDetailIndex}`] === 'joined');
+                      if (!canRate) {
+                        return (
+                          <span className="text-[11px] text-gray-500">Only participants who joined can rate.</span>
+                        );
                       }
+                      const rated = !!(activitiesModalProject && activityDetailIndex !== null &&
+                        evaluatedStatusByKey[`${activitiesModalProject._id}:${activityDetailIndex}`] === 'evaluated');
+                      if (rated) {
+                        return (
+                          <>
+                            <button type="button" disabled className="rounded-full bg-gray-200 px-4 py-1.5 font-semibold text-gray-500 cursor-not-allowed">
+                              Rate activity
+                            </button>
+                            <span className="text-[11px] text-gray-500 whitespace-nowrap">You have already submitted a rating.</span>
+                          </>
+                        );
+                      }
+                      return (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (!activitiesModalProject || activityDetailIndex === null) return;
+                            const key = `${activitiesModalProject._id}:${activityDetailIndex}`;
+                            const meta = joinedActivitiesMeta[key];
+                            if (!meta) {
+                              setActivityJoinError('Only participants who joined can rate this activity.');
+                              return;
+                            }
+                            openSurveyForMeta({
+                              projectId: meta.projectId,
+                              projectName: meta.projectName,
+                              activityId: meta.activityId,
+                              activityTitle: meta.activityTitle,
+                              endAt: meta.endAt,
+                            });
+                          }}
+                          className="rounded-full bg-yellow-500 px-4 py-1.5 font-semibold text-white shadow hover:bg-yellow-600"
+                        >
+                          Rate activity
+                        </button>
+                      );
+                    })()
+                  ) : (
+                    <button
+                      type="button"
+                      disabled={
+                        activityJoinLoading ||
+                        !participantEmail ||
+                        (activitiesModalProject &&
+                          activityDetailIndex !== null &&
+                          activityJoinStatusByKey[`${activitiesModalProject._id}:${activityDetailIndex}`] === 'joined')
+                      }
+                      onClick={async () => {
+                        if (!participantEmail) {
+                          setActivityJoinError('Your email could not be detected. Please sign out and log in again.');
+                          return;
+                        }
+                        if (!activitiesModalProject || activityDetailIndex === null) {
+                          setActivityJoinError('Activity information is missing. Please close and reopen this project.');
+                          return;
+                        }
 
-                      setActivityJoinStatusByKey((prev) => ({ ...prev, [key]: 'joined' }));
-                    } catch (joinErr: any) {
-                      setActivityJoinError(joinErr.message || 'Failed to join activity');
-                    } finally {
-                      setActivityJoinLoading(false);
-                    }
-                  }}
-                  className="rounded-full bg-yellow-500 px-4 py-1.5 font-semibold text-white shadow hover:bg-yellow-600 disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  {activitiesModalProject &&
-                  activityDetailIndex !== null &&
-                  activityJoinStatusByKey[`${activitiesModalProject._id}:${activityDetailIndex}`] === 'joined'
-                    ? 'Joined activity'
-                    : activityJoinLoading
-                    ? 'Joining…'
-                    : 'Join this activity'}
-                  </button>
+                        const key = `${activitiesModalProject._id}:${activityDetailIndex}`;
+
+                        try {
+                          setActivityJoinLoading(true);
+                          setActivityJoinError(null);
+
+                          const res = await fetch(
+                            `http://localhost:5000/api/projects/${activitiesModalProject._id}/activities/${activityDetailIndex}/join`,
+                            {
+                              method: 'POST',
+                              headers: {
+                                'Content-Type': 'application/json',
+                              },
+                              body: JSON.stringify({ email: participantEmail }),
+                            },
+                          );
+
+                          if (!res.ok) {
+                            const data = await res.json().catch(() => ({}));
+                            throw new Error(data.message || 'Failed to join activity');
+                          }
+
+                          setActivityJoinStatusByKey((prev) => ({ ...prev, [key]: 'joined' }));
+                        } catch (joinErr: any) {
+                          setActivityJoinError(joinErr.message || 'Failed to join activity');
+                        } finally {
+                          setActivityJoinLoading(false);
+                        }
+                      }}
+                      className="rounded-full bg-yellow-500 px-4 py-1.5 font-semibold text-white shadow hover:bg-yellow-600 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {activitiesModalProject &&
+                      activityDetailIndex !== null &&
+                      activityJoinStatusByKey[`${activitiesModalProject._id}:${activityDetailIndex}`] === 'joined'
+                        ? 'Joined activity'
+                        : activityJoinLoading
+                        ? 'Joining…'
+                        : 'Join this activity'}
+                    </button>
+                  )
                 ) : null}
               </div>
             </div>
@@ -1353,7 +1549,7 @@ export default function ParticipantFeedsPage() {
                   setJoinModalOpen(true);
                 }
               }}
-              className="flex h-full flex-col rounded-2xl border border-yellow-100 bg-white/70 p-4 text-left text-sm text-gray-800 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md"
+              className="flex h-full flex-col rounded-2xl border border-yellow-100 bg-white/70 p-4 text-left text-sm text-gray-800 shadow-sm transition"
             >
               <div className="mb-2 flex items-start justify-between gap-3">
                 <h3 className="line-clamp-2 text-base font-semibold text-gray-900">{project.name}</h3>
@@ -1372,6 +1568,99 @@ export default function ParticipantFeedsPage() {
                     : 'Open for registration'}
                 </span>
               </div>
+              {joinedStatusByProject[project._id] !== 'joined' && joinStatusByProject[project._id] !== 'pending' && (
+                <p className="mt-2 text-[11px] text-gray-500">
+                  This project is currently open for registration. Schedules are not available yet.
+                </p>
+              )}
+              {joinedStatusByProject[project._id] === 'joined' && activitiesByProjectId[project._id] && (
+                <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
+                  {(['upcoming','ongoing','ended'] as const).map((statusKey) => {
+                    const items = (activitiesByProjectId[project._id] || []);
+                    const now = nowMs;
+                    const filtered = items.filter((a) => {
+                      const startDate = a.startAt ? new Date(a.startAt) : undefined;
+                      const endDate = a.endAt ? new Date(a.endAt) : undefined;
+                      const hasValidStart = !!startDate && !Number.isNaN(startDate.getTime());
+                      const hasValidEnd = !!endDate && !Number.isNaN(endDate.getTime());
+                      const isExpired = hasValidEnd && endDate!.getTime() < now;
+                      const isOngoing = hasValidStart && hasValidEnd && startDate!.getTime() <= now && now <= endDate!.getTime();
+                      const isUpcoming = hasValidStart && !isOngoing && !isExpired && startDate!.getTime() > now;
+                      if (statusKey === 'ended') return isExpired;
+                      if (statusKey === 'ongoing') return isOngoing;
+                      if (statusKey === 'upcoming') return isUpcoming;
+                      return false;
+                    });
+                    const limited = filtered.slice(0, 2);
+                    return (
+                      <div
+                        key={statusKey}
+                        role="button"
+                        tabIndex={0}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          openActivitiesModal(project, statusKey);
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' || e.key === ' ') {
+                            e.preventDefault();
+                            (e.currentTarget as HTMLElement).click();
+                          }
+                        }}
+                        className="rounded-lg border border-yellow-100 bg-yellow-50/40 p-2 cursor-pointer hover:bg-yellow-100/60"
+                      >
+                        <p
+                          className={`mb-1 text-[11px] font-semibold capitalize ${
+                            statusKey === 'upcoming'
+                              ? 'text-blue-600'
+                              : statusKey === 'ongoing'
+                              ? 'text-emerald-600'
+                              : 'text-red-600'
+                          }`}
+                        >
+                          {statusKey}
+                        </p>
+                        {limited.length === 0 ? (
+                          <p className="text-[11px] text-gray-500">—</p>
+                        ) : (
+                          <ul className="space-y-1">
+                            {limited.map((a, idx) => (
+                              <li key={`${a.activityId}-${idx}`} className="text-[11px] text-gray-700 line-clamp-1">
+                                {a.title}
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                        {filtered.length > limited.length && (
+                          <span
+                            role="button"
+                            tabIndex={0}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              openActivitiesModal(project, statusKey);
+                            }}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter' || e.key === ' ') {
+                                e.preventDefault();
+                                (e.currentTarget as HTMLElement).click();
+                              }
+                            }}
+                            className={`mt-2 inline-block cursor-pointer text-[11px] font-medium hover:underline ${
+                              statusKey === 'upcoming'
+                                ? 'text-blue-700'
+                                : statusKey === 'ongoing'
+                                ? 'text-emerald-700'
+                                : 'text-red-700'
+                            }`}
+                          >
+                            See more
+                          </span>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </button>
           ))}
         </div>

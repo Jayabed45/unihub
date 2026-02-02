@@ -20,7 +20,7 @@ export default function Sidebar({ items, onLogout, logoutDisabled }: SidebarProp
     <aside className="hidden w-72 flex-col border-r border-amber-100 bg-white/80 backdrop-blur lg:flex h-full">
       <div className="px-6 pb-6 pt-10">
         <h1 className="text-2xl font-bold text-gray-900">UniHub</h1>
-        <p className="mt-1 text-sm text-gray-500">Administrator Console</p>
+        <p className="mt-1 text-sm text-black">Administrator Console</p>
       </div>
       <nav className="flex-1 space-y-1 px-4 mt-6">
         {items.map((item) => {
