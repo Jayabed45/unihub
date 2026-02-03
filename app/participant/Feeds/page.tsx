@@ -1586,9 +1586,12 @@ export default function ParticipantFeedsPage() {
                       const isExpired = hasValidEnd && endDate!.getTime() < now;
                       const isOngoing = hasValidStart && hasValidEnd && startDate!.getTime() <= now && now <= endDate!.getTime();
                       const isUpcoming = hasValidStart && !isOngoing && !isExpired && startDate!.getTime() > now;
-                      if (statusKey === 'ended') return isExpired;
-                      if (statusKey === 'ongoing') return isOngoing;
+                      // For columns: show all upcoming; for ongoing/ended, show only joined
                       if (statusKey === 'upcoming') return isUpcoming;
+                      const key = `${project._id}:${a.activityId}`;
+                      const joined = activityJoinStatusByKey[key] === 'joined';
+                      if (statusKey === 'ongoing') return isOngoing && joined;
+                      if (statusKey === 'ended') return isExpired && joined;
                       return false;
                     });
                     const limited = filtered.slice(0, 2);
