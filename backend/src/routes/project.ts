@@ -21,6 +21,7 @@ import {
   listActivityEvaluations,
   listProjectEvaluationSummaries,
   updateExtensionActivities,
+  emailBlastToBeneficiaries,
 } from '../controllers/projectController';
 
 const router = Router();
@@ -34,6 +35,7 @@ router.get('/:id', getProject);
 router.get('/:id/evaluations-summary', listProjectEvaluationSummaries);
 router.get('/:id/beneficiaries', listProjectBeneficiaries);
 router.patch('/:id/beneficiaries', updateProjectBeneficiary);
+router.post('/:id/email-blast', emailBlastToBeneficiaries);
 router.patch('/:id/evaluate', evaluateProject);
 router.delete('/:id', deleteProject);
 router.post('/:id/join', requestJoinProject);

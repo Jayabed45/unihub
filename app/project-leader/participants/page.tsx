@@ -30,6 +30,7 @@ interface ApprovedParticipantActivity {
 interface ApprovedParticipantRow {
   key: string;
   email: string;
+  fullName?: string;
   projectId: string;
   projectName: string;
   activities: ApprovedParticipantActivity[];
@@ -91,6 +92,14 @@ export default function ProjectLeaderParticipantsPage() {
   >([]);
   const [evalDetailLoading, setEvalDetailLoading] = useState(false);
   const [evalDetailError, setEvalDetailError] = useState<string | null>(null);
+  const [emailBlastOpen, setEmailBlastOpen] = useState(false);
+  const [emailBlastProjectId, setEmailBlastProjectId] = useState<string>('');
+  const [emailBlastTemplate, setEmailBlastTemplate] = useState<string>('');
+  const [emailBlastSubject, setEmailBlastSubject] = useState('');
+  const [emailBlastMessage, setEmailBlastMessage] = useState('');
+  const [emailBlastSending, setEmailBlastSending] = useState(false);
+  const [emailBlastError, setEmailBlastError] = useState<string | null>(null);
+  const [emailBlastSuccess, setEmailBlastSuccess] = useState<string | null>(null);
   const fetchPendingRequests = async () => {
     setLoading(true);
     setError(null);
@@ -340,7 +349,7 @@ export default function ProjectLeaderParticipantsPage() {
         setSelectedEvalProjectId(projects[0]._id);
       }
 
-      const beneficiariesByProject: Record<string, Array<{ email: string }>> = {};
+      const beneficiariesByProject: Record<string, Array<{ email: string; fullName?: string }>> = {};
       const uniqueEmails = new Set<string>();
 
       await Promise.all(
@@ -348,7 +357,11 @@ export default function ProjectLeaderParticipantsPage() {
           try {
             const res = await fetch(`http://localhost:5000/api/projects/${project._id}/beneficiaries`);
             if (!res.ok) return;
-            const data = (await res.json()) as Array<{ email: string; status: 'active' | 'removed' }>;
+            const data = (await res.json()) as Array<{
+              email: string;
+              fullName?: string;
+              status: 'active' | 'removed';
+            }>;
             const active = data.filter((b) => b.status === 'active');
             if (!active.length) return;
             beneficiariesByProject[project._id] = active;
@@ -425,6 +438,7 @@ export default function ProjectLeaderParticipantsPage() {
           nextRows.push({
             key: `${projectId}:${beneficiary.email}`,
             email: beneficiary.email,
+            fullName: beneficiary.fullName,
             projectId,
             projectName: projectNameById[projectId] ?? projectId,
             activities,
@@ -476,7 +490,6 @@ export default function ProjectLeaderParticipantsPage() {
           overallAverage: number;
           perQuestionAverages: Record<string, number>;
         }>;
-
         setEvalSummaries(Array.isArray(data) ? data : []);
       } catch (err: any) {
         setEvalSummariesError(err.message || 'Failed to load evaluation summaries');
@@ -493,6 +506,7 @@ export default function ProjectLeaderParticipantsPage() {
     const socket = io('http://localhost:5000');
 
     socket.on('notification:new', (payload: any) => {
+      // ...
       if (!payload || typeof payload.title !== 'string') {
         return;
       }
@@ -544,6 +558,7 @@ export default function ProjectLeaderParticipantsPage() {
         kind: 'pending';
         key: string;
         email: string;
+        fullName?: string;
         projectId?: string;
         projectName: string;
         requestedAtLabel?: string;
@@ -554,6 +569,7 @@ export default function ProjectLeaderParticipantsPage() {
         kind: 'approved';
         key: string;
         email: string;
+        fullName?: string;
         projectId: string;
         projectName: string;
         requestedAtLabel?: string;
@@ -566,6 +582,7 @@ export default function ProjectLeaderParticipantsPage() {
       kind: 'pending',
       key: `pending:${row.id}`,
       email: row.email,
+      fullName: undefined,
       projectId: row.projectId,
       projectName: row.projectName || row.projectId || 'Unknown project',
       requestedAtLabel: row.createdAtLabel,
@@ -576,6 +593,7 @@ export default function ProjectLeaderParticipantsPage() {
       kind: 'approved',
       key: `approved:${row.key}`,
       email: row.email,
+      fullName: row.fullName,
       projectId: row.projectId,
       projectName: row.projectName,
       requestedAtLabel: undefined,
@@ -593,12 +611,13 @@ export default function ProjectLeaderParticipantsPage() {
   const handleExportApprovedCsv = () => {
     if (!approvedRows.length) return;
 
-    const header = ['Email', 'Project', 'Activity', 'Status', 'Last updated'];
+    const header = ['Name', 'Email', 'Project', 'Activity', 'Status', 'Last updated'];
     const lines: string[][] = [];
 
     approvedRows.forEach((row) => {
+      const name = row.fullName || row.email;
       if (!row.activities.length) {
-        lines.push([row.email, row.projectName, '', 'No activities', '']);
+        lines.push([name, row.email, row.projectName, '', 'No activities', '']);
         return;
       }
 
@@ -615,6 +634,7 @@ export default function ProjectLeaderParticipantsPage() {
           : '';
 
         lines.push([
+          name,
           row.email,
           row.projectName,
           activity.activityTitle,
@@ -790,6 +810,67 @@ export default function ProjectLeaderParticipantsPage() {
     }
   };
 
+  const handleOpenEmailBlast = () => {
+    if (!leaderProjects.length) return;
+    const defaultProjectId = emailBlastProjectId || leaderProjects[0]._id;
+    setEmailBlastProjectId(defaultProjectId);
+    setEmailBlastSubject('');
+    setEmailBlastMessage('');
+    setEmailBlastError(null);
+    setEmailBlastSuccess(null);
+    setEmailBlastOpen(true);
+  };
+
+  const handleSendEmailBlast = async () => {
+    if (!emailBlastProjectId) {
+      setEmailBlastError('Please select a project.');
+      return;
+    }
+    if (!emailBlastSubject.trim()) {
+      setEmailBlastError('Subject is required.');
+      return;
+    }
+    if (!emailBlastMessage.trim()) {
+      setEmailBlastError('Message is required.');
+      return;
+    }
+
+    setEmailBlastSending(true);
+    setEmailBlastError(null);
+    setEmailBlastSuccess(null);
+
+    try {
+      const res = await fetch(
+        `http://localhost:5000/api/projects/${encodeURIComponent(emailBlastProjectId)}/email-blast`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ subject: emailBlastSubject, message: emailBlastMessage }),
+        },
+      );
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error((data as any).message || 'Failed to send email blast');
+      }
+
+      const data = (await res.json()) as { sentCount?: number; totalRecipients?: number };
+      const countLabel = typeof data.sentCount === 'number' ? data.sentCount : undefined;
+      const totalLabel = typeof data.totalRecipients === 'number' ? data.totalRecipients : undefined;
+      const msg =
+        countLabel !== undefined && totalLabel !== undefined
+          ? `Announcement emailed to ${countLabel} of ${totalLabel} participant(s).`
+          : 'Announcement emailed to project participants.';
+      setEmailBlastSuccess(msg);
+    } catch (err: any) {
+      setEmailBlastError(err.message || 'Failed to send email blast');
+    } finally {
+      setEmailBlastSending(false);
+    }
+  };
+
   return (
     <div className="space-y-6">
       <header className="flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
@@ -798,6 +879,16 @@ export default function ProjectLeaderParticipantsPage() {
           <p className="text-sm text-gray-600">
             Review participant join requests for your approved extension projects.
           </p>
+        </div>
+        <div className="mt-2 flex items-center gap-2 md:mt-0">
+          <button
+            type="button"
+            onClick={handleOpenEmailBlast}
+            disabled={!leaderProjects.length}
+            className="rounded-full bg-yellow-500 px-3 py-1 text-xs font-semibold text-white shadow hover:bg-yellow-600 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            Email announcement
+          </button>
         </div>
       </header>
 
@@ -1384,6 +1475,130 @@ export default function ProjectLeaderParticipantsPage() {
                 ))}
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {emailBlastOpen && leaderProjects.length > 0 && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4" role="dialog" aria-modal="true">
+          <div className="w-full max-w-lg rounded-2xl border border-yellow-100 bg-white p-6 text-sm text-gray-800 shadow-xl">
+            <div className="mb-4 flex items-start justify-between gap-3">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wide text-yellow-500">Email announcement</p>
+                <h3 className="mt-1 text-base font-semibold text-gray-900">Notify project participants</h3>
+                <p className="mt-1 text-[11px] text-gray-500">
+                  Sends an email to all active beneficiaries of the selected project.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setEmailBlastOpen(false);
+                  setEmailBlastError(null);
+                  setEmailBlastSuccess(null);
+                }}
+                className="rounded-full border border-yellow-200 px-3 py-1 text-xs font-semibold text-yellow-700 hover:bg-yellow-50"
+              >
+                Close
+              </button>
+            </div>
+
+            <div className="space-y-3 text-sm">
+              <div className="space-y-1">
+                <label className="text-xs font-semibold uppercase tracking-wide text-gray-700" htmlFor="email-blast-template">
+                  Announcement type (optional)
+                </label>
+                <select
+                  id="email-blast-template"
+                  className="w-full rounded-lg border border-yellow-200 bg-white px-3 py-2 text-sm text-gray-900 focus:border-yellow-400 focus:outline-none focus:ring-2 focus:ring-yellow-200"
+                  value={emailBlastTemplate}
+                  onChange={(event) => {
+                    const value = event.target.value;
+                    setEmailBlastTemplate(value);
+                    if (value === 'reminder') {
+                      setEmailBlastSubject("Reminder for upcoming activity");
+                    } else if (value === 'schedule-update') {
+                      setEmailBlastSubject("Schedule update for project activities");
+                    } else if (value === 'general') {
+                      setEmailBlastSubject("Announcement for project participants");
+                    }
+                  }}
+                >
+                  <option value="">Custom subject</option>
+                  <option value="reminder">Reminder</option>
+                  <option value="schedule-update">Schedule update</option>
+                  <option value="general">General announcement</option>
+                </select>
+              </div>
+
+              <div className="space-y-1">
+                <label className="text-xs font-semibold uppercase tracking-wide text-gray-700">
+                  Project
+                </label>
+                <select
+                  className="w-full rounded-lg border border-yellow-200 bg-white px-3 py-2 text-sm text-gray-900 focus:border-yellow-400 focus:outline-none focus:ring-2 focus:ring-yellow-200"
+                  value={emailBlastProjectId || (leaderProjects[0]?._id ?? '')}
+                  onChange={(event) => setEmailBlastProjectId(event.target.value)}
+                >
+                  {leaderProjects.map((project) => (
+                    <option key={project._id} value={project._id}>
+                      {project.name || 'Untitled project'}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="space-y-1">
+                <label className="text-xs font-semibold uppercase tracking-wide text-gray-700" htmlFor="email-blast-subject">
+                  Subject
+                </label>
+                <input
+                  id="email-blast-subject"
+                  type="text"
+                  className="w-full rounded-lg border border-yellow-200 bg-white px-3 py-2 text-sm text-gray-900 focus:border-yellow-400 focus:outline-none focus:ring-2 focus:ring-yellow-200"
+                  value={emailBlastSubject}
+                  onChange={(event) => setEmailBlastSubject(event.target.value)}
+                  placeholder="e.g., Reminder for tomorrow's activity"
+                />
+              </div>
+
+              <div className="space-y-1">
+                <label className="text-xs font-semibold uppercase tracking-wide text-gray-700" htmlFor="email-blast-message">
+                  Message
+                </label>
+                <textarea
+                  id="email-blast-message"
+                  rows={5}
+                  className="w-full rounded-lg border border-yellow-200 bg-white px-3 py-2 text-sm text-gray-900 focus:border-yellow-400 focus:outline-none focus:ring-2 focus:ring-yellow-200"
+                  value={emailBlastMessage}
+                  onChange={(event) => setEmailBlastMessage(event.target.value)}
+                  placeholder={"Include details like date, time, location, and what participants need to bring."}
+                />
+              </div>
+
+              {emailBlastError && (
+                <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+                  {emailBlastError}
+                </p>
+              )}
+
+              {emailBlastSuccess && (
+                <p className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-700">
+                  {emailBlastSuccess}
+                </p>
+              )}
+
+              <div className="mt-2 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={handleSendEmailBlast}
+                  disabled={emailBlastSending}
+                  className="rounded-full bg-yellow-500 px-4 py-1.5 text-xs font-semibold text-white shadow hover:bg-yellow-600 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {emailBlastSending ? 'Sending…' : 'Send announcement'}
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}

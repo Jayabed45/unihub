@@ -9,6 +9,9 @@ interface JoinedActivity {
   activityTitle: string;
   status: 'registered' | 'present' | 'absent';
   updatedAt?: string;
+  startAt?: string | null;
+  endAt?: string | null;
+  location?: string | null;
 }
 
 export default function ParticipantActivitiesPage() {
@@ -16,9 +19,6 @@ export default function ParticipantActivitiesPage() {
   const [activities, setActivities] = useState<JoinedActivity[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [sidePanelOpen, setSidePanelOpen] = useState(false);
-  const [sidePanelProject, setSidePanelProject] = useState<{ projectId: string; projectName: string } | null>(null);
-  const [sidePanelActivities, setSidePanelActivities] = useState<JoinedActivity[]>([]);
 
   const fetchJoinedActivities = useCallback(async () => {
     if (!participantEmail) return;
@@ -62,10 +62,16 @@ export default function ParticipantActivitiesPage() {
   }, [participantEmail, fetchJoinedActivities]);
 
   const groupedByProject = useMemo(() => {
-    if (!activities.length) return [];
+    if (!activities.length) return [] as Array<{
+      projectId: string;
+      projectName: string;
+      upcoming: JoinedActivity[];
+      ongoing: JoinedActivity[];
+      completed: JoinedActivity[];
+    }>;
 
     const map = new Map<string, { projectId: string; projectName: string; items: JoinedActivity[] }>();
-    
+
     activities.forEach((activity) => {
       const existing = map.get(activity.projectId);
       if (existing) {
@@ -79,21 +85,42 @@ export default function ParticipantActivitiesPage() {
       }
     });
 
-    return Array.from(map.values()).map((group) => ({
-      ...group,
-      items: [...group.items].sort((a, b) => a.activityId - b.activityId),
-    }));
+    const now = Date.now();
+
+    return Array.from(map.values()).map((group) => {
+      const upcoming: JoinedActivity[] = [];
+      const ongoing: JoinedActivity[] = [];
+      const completed: JoinedActivity[] = [];
+
+      const sorted = [...group.items].sort((a, b) => a.activityId - b.activityId);
+
+      sorted.forEach((item) => {
+        const startMs = item.startAt ? new Date(item.startAt).getTime() : NaN;
+        const endMs = item.endAt ? new Date(item.endAt).getTime() : NaN;
+        const hasStart = Number.isFinite(startMs);
+        const hasEnd = Number.isFinite(endMs);
+        const isOngoing = hasStart && hasEnd && startMs <= now && now <= endMs;
+        const isCompleted = hasEnd && endMs < now;
+
+        if (isOngoing) {
+          ongoing.push(item);
+        } else if (isCompleted) {
+          completed.push(item);
+        } else {
+          // No schedule or in the future – treat as upcoming
+          upcoming.push(item);
+        }
+      });
+
+      return {
+        projectId: group.projectId,
+        projectName: group.projectName,
+        upcoming,
+        ongoing,
+        completed,
+      };
+    });
   }, [activities]);
-
-  const handleSidePanelOpen = useCallback((projectId: string, projectName: string, items: JoinedActivity[]) => {
-    setSidePanelProject({ projectId, projectName });
-    setSidePanelActivities(items);
-    setSidePanelOpen(true);
-  }, []);
-
-  const handleCloseSidePanel = useCallback(() => {
-    setSidePanelOpen(false);
-  }, []);
 
   if (!participantEmail) {
     return (
@@ -139,8 +166,9 @@ export default function ParticipantActivitiesPage() {
       {!loading && !error && groupedByProject.length > 0 && (
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
           {groupedByProject.map((group) => {
-            const firstItem = group.items[0];
-            const extraCount = group.items.length - 1;
+            const hasUpcoming = group.upcoming.length > 0;
+            const hasOngoing = group.ongoing.length > 0;
+            const hasCompleted = group.completed.length > 0;
 
             return (
               <section
@@ -150,41 +178,72 @@ export default function ParticipantActivitiesPage() {
                 <header className="mb-3 flex items-start justify-between gap-3">
                   <div>
                     <h3 className="text-sm font-semibold text-gray-900 line-clamp-2">{group.projectName}</h3>
-                    <p className="mt-0.5 text-[11px] text-gray-500">Activities you joined under this project.</p>
+                    <p className="mt-0.5 text-[11px] text-gray-500">
+                      Activities you joined under this project, grouped by schedule.
+                    </p>
                   </div>
                 </header>
 
-                <ul className="mt-1 space-y-2 text-sm text-gray-800">
-                  {firstItem && (
-                    <ActivityItem 
-                      activity={firstItem} 
-                      activityId={firstItem.activityId} 
-                      projectId={group.projectId} 
-                    />
+                <div className="space-y-3 text-sm text-gray-800">
+                  {hasUpcoming && (
+                    <div>
+                      <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-gray-500">
+                        Upcoming
+                      </p>
+                      <ul className="space-y-2">
+                        {group.upcoming.map((activity) => (
+                          <ActivityItem
+                            key={`${activity.projectId}:${activity.activityId}`}
+                            activity={activity}
+                            activityId={activity.activityId}
+                            projectId={activity.projectId}
+                          />
+                        ))}
+                      </ul>
+                    </div>
                   )}
-                </ul>
 
-                {extraCount > 0 && (
-                  <button
-                    type="button"
-                    onClick={() => handleSidePanelOpen(group.projectId, group.projectName, group.items)}
-                    className="mt-2 self-start text-[11px] font-medium text-yellow-700 hover:underline"
-                  >
-                    See {extraCount} more activit{extraCount > 1 ? 'ies' : 'y'}
-                  </button>
-                )}
+                  {hasOngoing && (
+                    <div>
+                      <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-emerald-600">
+                        Ongoing
+                      </p>
+                      <ul className="space-y-2">
+                        {group.ongoing.map((activity) => (
+                          <ActivityItem
+                            key={`${activity.projectId}:${activity.activityId}`}
+                            activity={activity}
+                            activityId={activity.activityId}
+                            projectId={activity.projectId}
+                          />
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+
+                  {hasCompleted && (
+                    <div>
+                      <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-gray-500">
+                        Completed
+                      </p>
+                      <ul className="space-y-2">
+                        {group.completed.map((activity) => (
+                          <ActivityItem
+                            key={`${activity.projectId}:${activity.activityId}`}
+                            activity={activity}
+                            activityId={activity.activityId}
+                            projectId={activity.projectId}
+                          />
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </div>
               </section>
             );
           })}
         </div>
       )}
-
-      <SidePanel 
-        isOpen={sidePanelOpen} 
-        project={sidePanelProject} 
-        activities={sidePanelActivities} 
-        onClose={handleCloseSidePanel} 
-      />
     </div>
   );
 }
@@ -233,50 +292,4 @@ const StatusBadge = ({ status }: { status: 'registered' | 'present' | 'absent' }
   );
 };
 
-// Extracted SidePanel component
-const SidePanel = ({ 
-  isOpen, 
-  project, 
-  activities, 
-  onClose 
-}: { 
-  isOpen: boolean; 
-  project: { projectId: string; projectName: string } | null; 
-  activities: JoinedActivity[]; 
-  onClose: () => void 
-}) => {
-  if (!isOpen || !project) return null;
-
-  return (
-    <div className="fixed inset-0 z-40 flex justify-end bg-black/40">
-      <div className="h-full w-full max-w-md border-l border-gray-200 bg-white shadow-xl">
-        <div className="flex items-center justify-between border-b border-gray-100 px-4 py-3">
-          <div>
-            <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">Joined activities</p>
-            <h3 className="text-sm font-semibold text-gray-900 line-clamp-2">{project.projectName}</h3>
-          </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-full border border-gray-200 px-3 py-1 text-[11px] font-medium text-gray-700 hover:bg-gray-50"
-          >
-            Close
-          </button>
-        </div>
-
-        <div className="h-full overflow-y-auto px-4 py-3 text-sm text-gray-800">
-          <ul className="space-y-2">
-            {activities.map((activity) => (
-              <ActivityItem 
-                key={`${activity.projectId}:${activity.activityId}`} 
-                activity={activity}
-                activityId={activity.activityId}
-                projectId={activity.projectId}
-              />
-            ))}
-          </ul>
-        </div>
-      </div>
-    </div>
-  );
-};
+// Side panel has been removed; all activities are now visible and grouped within each project card.

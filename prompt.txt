@@ -1,0 +1,27 @@
+1. sa participants view, 3 columns: Upcoming Projects
+(katong naka join sya ug katong pwede pa sya mo join),
+Ongoing projects (kato rang naka join sya ug approved na sya) and Completed Projects 
+(katong naka join sya pero humana)
+
+2. for each project sa participants view, 
+makita niya tanan activities - upcoming,
+ongoing ug completed. then inig click sa activity,
+makita niya ug present ba or absent
+
+///
+In the participants view, there are 3 columns:
+
+Upcoming Projects
+(projects that the participant has joined and projects that they can still join)
+
+Ongoing Projects
+(only projects that the participant has joined and has been approved)
+
+Completed Projects
+(projects that the participant joined but are already finished)
+
+For each project in the participants view:
+
+The participant can see all activities — upcoming, ongoing, and completed.
+
+When the participant clicks an activity, they can see whether they are present or absent.

@@ -892,6 +892,19 @@ export const joinActivity = async (req: Request, res: Response) => {
     }
 
     try {
+      // Require the participant to be an active beneficiary of this project before joining activities
+      const activeBeneficiary = await ProjectBeneficiary.findOne({
+        project: project._id,
+        email,
+        status: 'active',
+      }).lean();
+
+      if (!activeBeneficiary) {
+        return res.status(400).json({
+          message: 'You must be an approved beneficiary of this project before you can join its activities.',
+        });
+      }
+
       const existing = await ActivityRegistration.findOne({
         project: project._id,
         activityId: numericActivityId,
@@ -1613,12 +1626,42 @@ export const listProjectBeneficiaries = async (req: Request, res: Response) => {
       .sort({ createdAt: 1 })
       .lean();
 
-    const result = docs.map((doc) => ({
-      email: doc.email,
-      status: doc.status,
-      joinedAt: doc.createdAt,
-      updatedAt: doc.updatedAt,
-    }));
+    const emailSet = new Set<string>();
+    docs.forEach((doc) => {
+      if (doc.email && typeof doc.email === 'string') {
+        emailSet.add(doc.email.trim());
+      }
+    });
+
+    const nameByEmail = new Map<string, string>();
+    if (emailSet.size > 0) {
+      try {
+        const users = await User.find({ email: { $in: Array.from(emailSet) } })
+          .select({ email: 1, username: 1 })
+          .lean();
+        users.forEach((u) => {
+          const email = typeof u.email === 'string' ? u.email.trim() : '';
+          const username = typeof (u as any).username === 'string' ? (u as any).username.trim() : '';
+          if (email && username) {
+            nameByEmail.set(email, username);
+          }
+        });
+      } catch (lookupError) {
+        console.error('Failed to lookup beneficiary names for listProjectBeneficiaries', lookupError);
+      }
+    }
+
+    const result = docs.map((doc) => {
+      const rawEmail = typeof doc.email === 'string' ? doc.email.trim() : '';
+      const fullName = rawEmail ? nameByEmail.get(rawEmail) || rawEmail : undefined;
+      return {
+        email: doc.email,
+        fullName,
+        status: doc.status,
+        joinedAt: doc.createdAt,
+        updatedAt: doc.updatedAt,
+      };
+    });
 
     return res.json(result);
   } catch (error) {
@@ -1978,5 +2021,77 @@ export const listProjectEvaluationSummaries = async (req: Request, res: Response
   } catch (error) {
     console.error('Error listing project evaluation summaries', error);
     return res.status(500).json({ message: 'Failed to load project evaluation summaries' });
+  }
+};
+
+export const emailBlastToBeneficiaries = async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { subject, message } = req.body as { subject?: string; message?: string };
+
+    const trimmedSubject = typeof subject === 'string' ? subject.trim() : '';
+    const trimmedMessage = typeof message === 'string' ? message.trim() : '';
+
+    if (!trimmedSubject) {
+      return res.status(400).json({ message: 'Subject is required' });
+    }
+
+    if (!trimmedMessage) {
+      return res.status(400).json({ message: 'Message is required' });
+    }
+
+    const project = await Project.findById(id).lean();
+    if (!project) {
+      return res.status(404).json({ message: 'Project not found' });
+    }
+
+    const beneficiaries = await ProjectBeneficiary.find({ project: project._id, status: { $ne: 'removed' } })
+      .sort({ createdAt: 1 })
+      .lean();
+
+    if (!beneficiaries.length) {
+      return res.status(400).json({ message: 'This project has no active beneficiaries to email' });
+    }
+
+    const projectName = (project as any).name || 'an extension project';
+
+    let sentCount = 0;
+
+    const html = buildRoleEmail(
+      'Project Leader',
+      trimmedSubject,
+      `
+        <p class="paragraph">You are receiving this announcement as a registered participant of <strong>${projectName}</strong>.</p>
+        <p class="paragraph">${trimmedMessage.replace(/\n/g, '<br />')}</p>
+      `,
+    );
+
+    await Promise.all(
+      beneficiaries.map(async (beneficiary) => {
+        const email = typeof beneficiary.email === 'string' ? beneficiary.email.trim() : '';
+        if (!email) return;
+
+        try {
+          await sendMail({
+            to: email,
+            subject: trimmedSubject,
+            text: trimmedMessage,
+            html,
+          });
+          sentCount += 1;
+        } catch (error) {
+          console.error('Failed to send email blast to beneficiary', { projectId: project._id, email }, error);
+        }
+      }),
+    );
+
+    return res.json({
+      projectId: project._id.toString(),
+      sentCount,
+      totalRecipients: beneficiaries.length,
+    });
+  } catch (error) {
+    console.error('Error sending email blast to beneficiaries', error);
+    return res.status(500).json({ message: 'Failed to send email blast' });
   }
 };

@@ -157,7 +157,7 @@ export default function AllUsersPage() {
     <div className="space-y-6">
       <header className="flex flex-col gap-1 sm:flex-row sm:items-baseline sm:justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">All users</h1>
+          <h1 className="text-2xl font-bold text-gray-900">Users</h1>
           <p className="text-sm text-gray-600">Oversee user accounts, roles, and presence.</p>
         </div>
       </header>

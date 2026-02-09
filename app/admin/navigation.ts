@@ -9,12 +9,12 @@ export const adminNavigation = [
   },
   {
     name: 'All projects',
-    description: 'Review and manage every registered project.',
+    description: 'Review and manage registered projects.',
     icon: FolderKanban,
     href: '/admin/projects',
   },
   {
-    name: 'All users',
+    name: 'Users',
     description: 'Oversee user accounts and roles.',
     icon: Users,
     href: '/admin/users',

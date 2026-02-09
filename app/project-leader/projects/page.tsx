@@ -125,7 +125,7 @@ export default function ProjectLeaderProjectsPage() {
   const [attendanceViewOpen, setAttendanceViewOpen] = useState(false);
   const [attendanceActivity, setAttendanceActivity] = useState<ProjectActivity | null>(null);
   const [attendanceRows, setAttendanceRows] = useState<
-    Array<{ participantEmail: string; status: 'registered' | 'present' | 'absent'; updatedAt?: string }>
+    Array<{ participantEmail: string; fullName?: string; status: 'registered' | 'present' | 'absent'; updatedAt?: string }>
   >([]);
   const [attendanceLoading, setAttendanceLoading] = useState(false);
   const [attendanceError, setAttendanceError] = useState<string | null>(null);
@@ -1505,28 +1505,57 @@ export default function ProjectLeaderProjectsPage() {
       setAttendanceError(null);
 
       try {
-        const res = await fetch(
-          `http://localhost:5000/api/projects/${activitiesModalProject._id}/activities/${attendanceActivity.activityId}/registrations`,
-        );
+        const [regRes, benRes] = await Promise.all([
+          fetch(
+            `http://localhost:5000/api/projects/${activitiesModalProject._id}/activities/${attendanceActivity.activityId}/registrations`,
+          ),
+          fetch(`http://localhost:5000/api/projects/${activitiesModalProject._id}/beneficiaries`),
+        ]);
 
-        if (!res.ok) {
-          const data = await res.json().catch(() => ({}));
+        if (!regRes.ok) {
+          const data = await regRes.json().catch(() => ({}));
           throw new Error(data.message || 'Failed to load activity registrations');
         }
 
-        const data = (await res.json()) as Array<{
+        const regData = (await regRes.json()) as Array<{
           participantEmail: string;
           status: 'registered' | 'present' | 'absent';
           updatedAt?: string;
         }>;
 
+        let nameByEmail = new Map<string, string | undefined>();
+        if (benRes.ok) {
+          try {
+            const benData = (await benRes.json()) as Array<{
+              email: string;
+              fullName?: string;
+              status: 'active' | 'removed';
+            }>;
+            benData
+              .filter((b) => b.status === 'active')
+              .forEach((b) => {
+                const email = typeof b.email === 'string' ? b.email.trim() : '';
+                if (email) {
+                  nameByEmail.set(email, b.fullName || undefined);
+                }
+              });
+          } catch {
+            nameByEmail = new Map();
+          }
+        }
+
         if (!cancelled) {
           setAttendanceRows(
-            data.map((row) => ({
-              participantEmail: row.participantEmail,
-              status: row.status,
-              updatedAt: row.updatedAt,
-            })),
+            regData.map((row) => {
+              const email = typeof row.participantEmail === 'string' ? row.participantEmail.trim() : '';
+              const fullName = email ? nameByEmail.get(email) : undefined;
+              return {
+                participantEmail: row.participantEmail,
+                fullName,
+                status: row.status,
+                updatedAt: row.updatedAt,
+              };
+            }),
           );
         }
       } catch (err: any) {
@@ -2030,23 +2059,18 @@ export default function ProjectLeaderProjectsPage() {
                       : 'Pending approval';
                   const hasEvaluation = !!project.evaluation;
                   const isHighlighted = project._id === highlightProjectId;
-                  const isApproved = status === 'Approved';
 
                   return (
                     <div
                       key={project._id}
                       onClick={() => {
-                        if (isApproved) {
-                          openActivitiesModal(project);
-                        }
+                        openReviewPanel(project._id);
                       }}
                       className={`flex h-full flex-col rounded-2xl border bg-white/90 p-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-lg ${
                         isHighlighted
                           ? 'border-yellow-400 shadow-yellow-300 ring-2 ring-yellow-300 animate-pulse'
                           : 'border-yellow-100'
-                      } ${
-                        isApproved ? 'cursor-pointer' : 'cursor-default'
-                      }`}
+                      } cursor-pointer`}
                     >
                       <div className="flex-1 space-y-1">
                         <h3 className="text-sm font-semibold text-gray-900 line-clamp-2">{project.name}</h3>
@@ -2063,7 +2087,19 @@ export default function ProjectLeaderProjectsPage() {
                             </span>
                           )}
                         </div>
-                        <div className="relative">
+                        <div className="relative flex items-center gap-2">
+                          {status === 'Approved' && (
+                            <button
+                              type="button"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                openActivitiesModal(project);
+                              }}
+                              className="rounded-full border border-yellow-200 px-3 py-1 font-semibold text-yellow-700 transition hover:bg-yellow-50"
+                            >
+                              View activities
+                            </button>
+                          )}
                           <button
                             type="button"
                             onClick={(event) => {
@@ -2078,17 +2114,6 @@ export default function ProjectLeaderProjectsPage() {
                           </button>
                           {optionsOpenProjectId === project._id && (
                             <div className="absolute right-0 z-10 mt-1 w-44 rounded-lg border border-yellow-100 bg-white py-1 text-left text-[11px] shadow-lg">
-                              <button
-                                type="button"
-                                onClick={(event) => {
-                                  event.stopPropagation();
-                                  openReviewPanel(project._id);
-                                  setOptionsOpenProjectId(null);
-                                }}
-                                className="block w-full px-3 py-1.5 text-left text-gray-700 hover:bg-yellow-50"
-                              >
-                                Review project
-                              </button>
                               {hasEvaluation && (
                                 <button
                                   type="button"
@@ -2111,6 +2136,16 @@ export default function ProjectLeaderProjectsPage() {
                                 className="block w-full px-3 py-1.5 text-left text-red-600 hover:bg-red-50"
                               >
                                 Delete
+                              </button>
+                              <button
+                                type="button"
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  setOptionsOpenProjectId(null);
+                                }}
+                                className="block w-full px-3 py-1.5 text-left text-gray-700 hover:bg-yellow-50"
+                              >
+                                Close
                               </button>
                             </div>
                           )}
@@ -2150,7 +2185,7 @@ export default function ProjectLeaderProjectsPage() {
             <div className="flex items-center justify-between border-b border-yellow-100 px-6 py-4">
               <div>
                 <p className="text-xs font-semibold uppercase tracking-wide text-yellow-500">Project Leader Workspace</p>
-                <h2 className="text-lg font-semibold text-gray-900">Project Proposal Builder</h2>
+                <h2 className="text-lg font-semibold text-gray-900">Project</h2>
               </div>
               <div className="flex items-center gap-2">
                 {saveError ? (
@@ -2797,16 +2832,20 @@ export default function ProjectLeaderProjectsPage() {
                     <table className="min-w-full text-left text-xs text-gray-800">
                       <thead className="bg-yellow-50 text-[11px] font-semibold uppercase tracking-wide text-gray-600">
                         <tr>
-                          <th className="px-3 py-2">Participant email</th>
+                          <th className="px-3 py-2">Participant</th>
                           <th className="px-3 py-2">Status</th>
                           <th className="px-3 py-2">Actions</th>
                           <th className="px-3 py-2">Last updated</th>
                         </tr>
                       </thead>
                       <tbody>
-                        {attendanceRows.map((row) => (
+                        {attendanceRows.map((row) => {
+                          const displayName = row.fullName && row.fullName !== row.participantEmail
+                            ? `${row.fullName} (${row.participantEmail})`
+                            : row.participantEmail;
+                          return (
                           <tr key={row.participantEmail} className="border-t border-yellow-100">
-                            <td className="px-3 py-2 text-xs font-medium text-gray-900">{row.participantEmail}</td>
+                            <td className="px-3 py-2 text-xs font-medium text-gray-900">{displayName}</td>
                             <td className="px-3 py-2 text-xs text-gray-700 capitalize">{row.status}</td>
                             <td className="px-3 py-2 text-xs">
                               <div className="flex flex-wrap items-center gap-1">
@@ -2839,13 +2878,14 @@ export default function ProjectLeaderProjectsPage() {
                             <td className="px-3 py-2 text-[10px] text-gray-500">
                               {row.updatedAt
                                 ? new Date(row.updatedAt).toLocaleString('en-PH', {
-                                    dateStyle: 'medium',
-                                    timeStyle: 'short',
-                                  })
+                                  dateStyle: 'medium',
+                                  timeStyle: 'short',
+                                })
                                 : ''}
                             </td>
                           </tr>
-                        ))}
+                          );
+                        })}
                       </tbody>
                     </table>
                   </div>

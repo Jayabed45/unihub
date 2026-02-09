@@ -45,6 +45,9 @@ export default function AdminProjectsPage() {
   const [evaluationSaving, setEvaluationSaving] = useState(false);
   const [evaluationError, setEvaluationError] = useState<string | null>(null);
 
+  const [exportPreviewOpen, setExportPreviewOpen] = useState(false);
+  const [exportPreviewKind, setExportPreviewKind] = useState<'summary' | 'beneficiaries' | null>(null);
+
   const viewerRootRef = useRef<HTMLDivElement | null>(null);
   const socketRef = useRef<Socket | null>(null);
 
@@ -381,6 +384,15 @@ export default function AdminProjectsPage() {
     }
   };
 
+  const forApprovalProjects = projects.filter((project) => {
+    const status = project.status || 'Pending';
+    return status === 'Pending';
+  });
+
+  const approvedProjects = projects.filter((project) => project.status === 'Approved');
+
+  const endedProjects = projects.filter((project) => project.status === 'Rejected');
+
   return (
     <div className="space-y-6">
       <header className="flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
@@ -393,7 +405,10 @@ export default function AdminProjectsPage() {
         <div className="mt-2 flex items-center md:mt-0">
           <button
             type="button"
-            onClick={handleExportProjectSummaryCsv}
+            onClick={() => {
+              setExportPreviewKind('summary');
+              setExportPreviewOpen(true);
+            }}
             className="rounded-full border border-amber-200 px-3 py-1 text-xs font-semibold text-amber-700 transition hover:bg-amber-50"
           >
             Export project summary (.xlsx)
@@ -411,77 +426,360 @@ export default function AdminProjectsPage() {
             No project proposals have been submitted yet.
           </div>
         ) : (
-          <div className="space-y-4">
-            <div>
-              <h2 className="text-sm font-semibold text-gray-900">Submitted projects</h2>
-              <p className="text-xs text-gray-500">
-                Each card represents a proposal from a project leader. Use the status pill and View button to review.
-              </p>
-            </div>
-            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-              {projects.map((project) => {
-                const status = project.status || "Pending";
-                const statusLabel =
-                  status === "Approved" ? "Approved" : status === "Rejected" ? "Rejected" : "Pending";
-                const statusColor =
-                  status === "Approved"
-                    ? "bg-emerald-50 text-emerald-700 border-emerald-200"
-                    : status === "Rejected"
-                    ? "bg-red-50 text-red-700 border-red-200"
-                    : "bg-amber-50 text-amber-700 border-amber-200";
+          <div className="space-y-8">
+            {forApprovalProjects.length > 0 && (
+              <div className="space-y-3">
+                <div>
+                  <h2 className="text-sm font-semibold text-gray-900">Projects for approval</h2>
+                  <p className="text-xs text-gray-500">
+                    These proposals are waiting for an admin evaluation and decision.
+                  </p>
+                </div>
+                <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+                  {forApprovalProjects.map((project) => {
+                    const status = project.status || 'Pending';
+                    const statusLabel = 'Pending';
+                    const statusColor =
+                      status === 'Approved'
+                        ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                        : status === 'Rejected'
+                        ? 'bg-red-50 text-red-700 border-red-200'
+                        : 'bg-amber-50 text-amber-700 border-amber-200';
 
-                const isHighlighted = project._id === highlightProjectId;
+                    const isHighlighted = project._id === highlightProjectId;
 
-                return (
-                  <div
-                    key={project._id}
-                    className={`flex h-full flex-col rounded-xl border bg-white/80 p-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md ${
-                      isHighlighted
-                        ? 'border-amber-400 shadow-amber-300 ring-2 ring-amber-300 animate-pulse'
-                        : 'border-amber-100'
-                    }`}
-                  >
-                    <div className="flex-1 space-y-1">
-                      <h2 className="text-sm font-semibold text-gray-900 line-clamp-2">{project.name}</h2>
-                      <p className="text-xs text-gray-600 line-clamp-3">{project.description}</p>
-                    </div>
-                    <div className="mt-4 flex items-center justify-between gap-2 text-xs">
-                      <span
-                        className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide ${statusColor}`}
+                    return (
+                      <div
+                        key={project._id}
+                        className={`flex h-full flex-col rounded-xl border bg-white/80 p-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md ${
+                          isHighlighted
+                            ? 'border-amber-400 shadow-amber-300 ring-2 ring-amber-300 animate-pulse'
+                            : 'border-amber-100'
+                        }`}
                       >
-                        {statusLabel}
-                      </span>
-                      <div className="flex items-center gap-2">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setBeneficiariesProject(project);
-                            setBeneficiariesOpen(true);
-                          }}
-                          className="rounded-full border border-amber-200 px-3 py-1 text-xs font-semibold text-amber-700 transition hover:bg-amber-50"
-                        >
-                          Beneficiaries
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setViewerProject(project);
-                            setViewerMounted(true);
-                            window.setTimeout(() => setViewerVisible(true), 20);
-                          }}
-                          className="rounded-full border border-amber-200 px-3 py-1 text-xs font-semibold text-amber-700 transition hover:bg-amber-50"
-                        >
-                          View
-                        </button>
+                        <div className="flex-1 space-y-1">
+                          <h2 className="text-sm font-semibold text-gray-900 line-clamp-2">{project.name}</h2>
+                          <p className="text-xs text-gray-600 line-clamp-3">{project.description}</p>
+                        </div>
+                        <div className="mt-4 flex items-center justify-between gap-2 text-xs">
+                          <span
+                            className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide ${statusColor}`}
+                          >
+                            {statusLabel}
+                          </span>
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setBeneficiariesProject(project);
+                                setBeneficiariesOpen(true);
+                              }}
+                              className="rounded-full border border-amber-200 px-3 py-1 text-xs font-semibold text-amber-700 transition hover:bg-amber-50"
+                            >
+                              Beneficiaries
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setViewerProject(project);
+                                setViewerMounted(true);
+                                window.setTimeout(() => setViewerVisible(true), 20);
+                              }}
+                              className="rounded-full border border-amber-200 px-3 py-1 text-xs font-semibold text-amber-700 transition hover:bg-amber-50"
+                            >
+                              View
+                            </button>
+                          </div>
+                        </div>
                       </div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {approvedProjects.length > 0 && (
+              <div className="space-y-3">
+                <div>
+                  <h2 className="text-sm font-semibold text-gray-900">Approved projects</h2>
+                  <p className="text-xs text-gray-500">
+                    Proposals that have been evaluated and marked as approved.
+                  </p>
+                </div>
+                <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+                  {approvedProjects.map((project) => {
+                    const status = project.status || 'Approved';
+                    const statusLabel = 'Approved';
+                    const statusColor =
+                      status === 'Approved'
+                        ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                        : status === 'Rejected'
+                        ? 'bg-red-50 text-red-700 border-red-200'
+                        : 'bg-amber-50 text-amber-700 border-amber-200';
+
+                    const isHighlighted = project._id === highlightProjectId;
+
+                    return (
+                      <div
+                        key={project._id}
+                        className={`flex h-full flex-col rounded-xl border bg-white/80 p-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md ${
+                          isHighlighted
+                            ? 'border-emerald-400 shadow-emerald-300 ring-2 ring-emerald-300'
+                            : 'border-amber-100'
+                        }`}
+                      >
+                        <div className="flex-1 space-y-1">
+                          <h2 className="text-sm font-semibold text-gray-900 line-clamp-2">{project.name}</h2>
+                          <p className="text-xs text-gray-600 line-clamp-3">{project.description}</p>
+                        </div>
+                        <div className="mt-4 flex items-center justify-between gap-2 text-xs">
+                          <span
+                            className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide ${statusColor}`}
+                          >
+                            {statusLabel}
+                          </span>
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setBeneficiariesProject(project);
+                                setBeneficiariesOpen(true);
+                              }}
+                              className="rounded-full border border-amber-200 px-3 py-1 text-xs font-semibold text-amber-700 transition hover:bg-amber-50"
+                            >
+                              Beneficiaries
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setViewerProject(project);
+                                setViewerMounted(true);
+                                window.setTimeout(() => setViewerVisible(true), 20);
+                              }}
+                              className="rounded-full border border-amber-200 px-3 py-1 text-xs font-semibold text-amber-700 transition hover:bg-amber-50"
+                            >
+                              View
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {endedProjects.length > 0 && (
+              <div className="space-y-3">
+                <div>
+                  <h2 className="text-sm font-semibold text-gray-900">Ended projects</h2>
+                  <p className="text-xs text-gray-500">
+                    Proposals that were marked as rejected or otherwise ended.
+                  </p>
+                </div>
+                <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+                  {endedProjects.map((project) => {
+                    const status = project.status || 'Rejected';
+                    const statusLabel = 'Ended';
+                    const statusColor =
+                      status === 'Approved'
+                        ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                        : status === 'Rejected'
+                        ? 'bg-red-50 text-red-700 border-red-200'
+                        : 'bg-amber-50 text-amber-700 border-amber-200';
+
+                    const isHighlighted = project._id === highlightProjectId;
+
+                    return (
+                      <div
+                        key={project._id}
+                        className={`flex h-full flex-col rounded-xl border bg-white/80 p-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md ${
+                          isHighlighted
+                            ? 'border-red-400 shadow-red-300 ring-2 ring-red-300'
+                            : 'border-amber-100'
+                        }`}
+                      >
+                        <div className="flex-1 space-y-1">
+                          <h2 className="text-sm font-semibold text-gray-900 line-clamp-2">{project.name}</h2>
+                          <p className="text-xs text-gray-600 line-clamp-3">{project.description}</p>
+                        </div>
+                        <div className="mt-4 flex items-center justify-between gap-2 text-xs">
+                          <span
+                            className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide ${statusColor}`}
+                          >
+                            {statusLabel}
+                          </span>
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setBeneficiariesProject(project);
+                                setBeneficiariesOpen(true);
+                              }}
+                              className="rounded-full border border-amber-200 px-3 py-1 text-xs font-semibold text-amber-700 transition hover:bg-amber-50"
+                            >
+                              Beneficiaries
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setViewerProject(project);
+                                setViewerMounted(true);
+                                window.setTimeout(() => setViewerVisible(true), 20);
+                              }}
+                              className="rounded-full border border-amber-200 px-3 py-1 text-xs font-semibold text-amber-700 transition hover:bg-amber-50"
+                            >
+                              View
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {forApprovalProjects.length === 0 &&
+              approvedProjects.length === 0 &&
+              endedProjects.length === 0 && (
+                <div className="text-center text-sm text-gray-600">
+                  No project proposals have been submitted yet.
+                </div>
+              )}
           </div>
         )}
       </section>
+
+      {exportPreviewOpen && exportPreviewKind && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4" role="dialog" aria-modal="true">
+          <div className="w-full max-w-md rounded-2xl border border-amber-100 bg-white p-5 text-sm text-gray-800 shadow-xl">
+            <div className="mb-3 flex items-start justify-between gap-3">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wide text-amber-500">Export preview</p>
+                <h2 className="mt-1 text-base font-semibold text-gray-900">
+                  {exportPreviewKind === 'summary' ? 'Project summary file' : 'Beneficiaries list'}
+                </h2>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setExportPreviewOpen(false);
+                  setExportPreviewKind(null);
+                }}
+                className="rounded-full border border-amber-200 px-3 py-1 text-xs font-semibold text-amber-700 hover:bg-amber-50"
+              >
+                Close
+              </button>
+            </div>
+
+            <div className="space-y-3 text-xs">
+              {exportPreviewKind === 'summary' ? (
+                <>
+                  <p className="text-gray-700">
+                    You are about to export an overview of all projects, including their basic details and
+                    evaluation status.
+                  </p>
+                  <div className="rounded-lg border border-dashed border-amber-200 bg-amber-50/60 px-3 py-2">
+                    <p className="font-semibold text-gray-900">File name</p>
+                    <p className="text-[11px] text-gray-700">unihub-project-summary.xlsx</p>
+                    <p className="mt-1 text-[11px] text-gray-500">
+                      Format: Microsoft Excel (.xlsx)
+                    </p>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <p className="text-gray-700">
+                    You are about to export the beneficiaries list for this project as a CSV file.
+                  </p>
+                  <div className="rounded-lg border border-dashed border-amber-200 bg-amber-50/60 px-3 py-2">
+                    <p className="font-semibold text-gray-900">Approximate rows</p>
+                    <p className="text-[11px] text-gray-700">
+                      {beneficiaries.length > 0
+                        ? `${beneficiaries.length} beneficiary record${beneficiaries.length === 1 ? '' : 's'}`
+                        : 'No beneficiaries loaded. Open a project and view beneficiaries first.'}
+                    </p>
+                    <p className="mt-1 text-[11px] text-gray-500">Format: Comma-separated values (.csv)</p>
+                  </div>
+                  {beneficiaries.length > 0 && (
+                    <div className="mt-2 rounded-lg border border-amber-100 bg-white/80">
+                      <div className="max-h-48 overflow-auto">
+                        <table className="min-w-full border-collapse text-[11px]">
+                          <thead>
+                            <tr className="bg-amber-50 text-[10px] uppercase tracking-wide text-gray-600">
+                              <th className="border-b border-amber-100 px-2 py-1 text-left font-semibold">Email</th>
+                              <th className="border-b border-amber-100 px-2 py-1 text-left font-semibold">Status</th>
+                              <th className="border-b border-amber-100 px-2 py-1 text-left font-semibold">Joined at</th>
+                              <th className="border-b border-amber-100 px-2 py-1 text-left font-semibold">Last updated</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {beneficiaries.map((row) => {
+                              const joined = row.joinedAt
+                                ? new Date(row.joinedAt).toLocaleString('en-PH')
+                                : '';
+                              const updated = row.updatedAt
+                                ? new Date(row.updatedAt).toLocaleString('en-PH')
+                                : '';
+
+                              return (
+                                <tr key={row.email} className="odd:bg-white even:bg-amber-50/40">
+                                  <td className="border-b border-amber-50 px-2 py-1 align-top text-gray-900">
+                                    {row.email}
+                                  </td>
+                                  <td className="border-b border-amber-50 px-2 py-1 align-top capitalize text-gray-700">
+                                    {row.status}
+                                  </td>
+                                  <td className="border-b border-amber-50 px-2 py-1 align-top text-gray-700">
+                                    {joined}
+                                  </td>
+                                  <td className="border-b border-amber-50 px-2 py-1 align-top text-gray-700">
+                                    {updated}
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+
+            <div className="mt-4 flex justify-end gap-2 text-xs">
+              <button
+                type="button"
+                onClick={() => {
+                  setExportPreviewOpen(false);
+                  setExportPreviewKind(null);
+                }}
+                className="rounded-full border border-amber-200 px-3 py-1 font-semibold text-amber-700 hover:bg-amber-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={async () => {
+                  if (exportPreviewKind === 'summary') {
+                    await handleExportProjectSummaryCsv();
+                  } else if (exportPreviewKind === 'beneficiaries') {
+                    handleExportBeneficiariesCsv();
+                  }
+                  setExportPreviewOpen(false);
+                  setExportPreviewKind(null);
+                }}
+                className="rounded-full bg-amber-500 px-3 py-1 font-semibold text-white shadow hover:bg-amber-600 disabled:cursor-not-allowed disabled:opacity-70"
+                disabled={exportPreviewKind === 'beneficiaries' && (!beneficiariesProject || !beneficiaries.length)}
+              >
+                Export now
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {viewerMounted && (
         <div
@@ -868,7 +1166,10 @@ export default function AdminProjectsPage() {
               <div className="flex items-center gap-2">
                 <button
                   type="button"
-                  onClick={handleExportBeneficiariesCsv}
+                  onClick={() => {
+                    setExportPreviewKind('beneficiaries');
+                    setExportPreviewOpen(true);
+                  }}
                   disabled={!beneficiaries.length}
                   className="rounded-full border border-amber-200 px-3 py-1 text-xs font-semibold text-amber-700 hover:bg-amber-50 disabled:cursor-not-allowed disabled:opacity-60"
                 >
