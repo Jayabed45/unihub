@@ -130,6 +130,25 @@ export default function ProjectLeaderProjectsPage() {
   const [attendanceLoading, setAttendanceLoading] = useState(false);
   const [attendanceError, setAttendanceError] = useState<string | null>(null);
   const [attendanceUpdatingEmail, setAttendanceUpdatingEmail] = useState<string | null>(null);
+  const [terminalReportOpen, setTerminalReportOpen] = useState(false);
+  const [terminalReportLoading, setTerminalReportLoading] = useState(false);
+  const [terminalReportError, setTerminalReportError] = useState<string | null>(null);
+  const [terminalReportTotals, setTerminalReportTotals] = useState<
+    | {
+        totalActivities: number;
+        totalRegistrations: number;
+        present: number;
+        absent: number;
+        notOnAttendance: number;
+        activities: Array<{
+          title: string;
+          present: number;
+          absent: number;
+          total: number;
+        }>;
+      }
+    | null
+  >(null);
   const socketRef = useRef<Socket | null>(null);
   const [highlightedProjectActivity, setHighlightedProjectActivity] = useState<
     | {
@@ -143,6 +162,106 @@ export default function ProjectLeaderProjectsPage() {
   >({});
   const [activityScheduleSavingKey, setActivityScheduleSavingKey] = useState<string | null>(null);
   const [activityScheduleError, setActivityScheduleError] = useState<string | null>(null);
+
+  const renderProjectCard = (project: LeaderProject) => {
+    const status = project.status || 'Pending';
+    const statusLabel =
+      status === 'Approved' ? 'Approved' : status === 'Rejected' ? 'Rejected' : 'Pending approval';
+    const hasEvaluation = !!project.evaluation;
+    const isHighlighted = project._id === highlightProjectId;
+
+    return (
+      <div
+        key={project._id}
+        onClick={() => {
+          openReviewPanel(project._id);
+        }}
+        className={`flex h-full flex-col rounded-2xl border bg-white/90 p-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-lg ${
+          isHighlighted
+            ? 'border-yellow-400 shadow-yellow-300 ring-2 ring-yellow-300 animate-pulse'
+            : 'border-yellow-100'
+        } cursor-pointer`}
+      >
+        <div className="flex-1 space-y-1">
+          <h3 className="text-sm font-semibold text-gray-900 line-clamp-2">{project.name}</h3>
+          <p className="text-xs text-gray-600 line-clamp-3">{project.description}</p>
+        </div>
+        <div className="mt-4 flex items-center justify-between gap-2 text-xs">
+          <div className="flex flex-col gap-1">
+            <span className="inline-flex items-center rounded-full bg-yellow-50 px-2 py-0.5 font-semibold text-yellow-700">
+              {statusLabel}
+            </span>
+            {hasEvaluation && (
+              <span className="inline-flex items-center rounded-full border border-emerald-100 bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-700">
+                Evaluated
+              </span>
+            )}
+          </div>
+          <div className="relative flex items-center gap-2">
+            {status === 'Approved' && (
+              <button
+                type="button"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  openActivitiesModal(project);
+                }}
+                className="rounded-full border border-yellow-200 px-3 py-1 font-semibold text-yellow-700 transition hover:bg-yellow-50"
+              >
+                View activities
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation();
+                setOptionsOpenProjectId((current) => (current === project._id ? null : project._id));
+              }}
+              className="rounded-full border border-yellow-200 px-3 py-1 font-semibold text-yellow-700 transition hover:bg-yellow-50"
+            >
+              Options
+            </button>
+            {optionsOpenProjectId === project._id && (
+              <div className="absolute right-0 z-10 mt-1 w-44 rounded-lg border border-yellow-100 bg-white py-1 text-left text-[11px] shadow-lg">
+                {hasEvaluation && (
+                  <button
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      setEvaluationViewProject(project);
+                      setOptionsOpenProjectId(null);
+                    }}
+                    className="block w-full px-3 py-1.5 text-left text-emerald-700 hover:bg-emerald-50"
+                  >
+                    View evaluation
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    handleDeleteProject(project._id);
+                  }}
+                  className="block w-full px-3 py-1.5 text-left text-red-600 hover:bg-red-50"
+                >
+                  Delete
+                </button>
+                <button
+                  type="button"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    setOptionsOpenProjectId(null);
+                  }}
+                  className="block w-full px-3 py-1.5 text-left text-gray-700 hover:bg-yellow-50"
+                >
+                  Close
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  };
 
   const parseBudgetNumber = (rawValue: string): number => {
     const cleaned = rawValue.replace(/[^0-9.,-]/g, '').replace(/,/g, '');
@@ -278,6 +397,97 @@ export default function ProjectLeaderProjectsPage() {
   }, [pathname]);
 
   const transitionMs = 360;
+
+  const { upcomingLeaderProjects, ongoingLeaderProjects, completedLeaderProjects } = useMemo(() => {
+    const now = nowMs;
+
+    const upcoming: LeaderProject[] = [];
+    const ongoing: LeaderProject[] = [];
+    const completed: LeaderProject[] = [];
+
+    projects.forEach((project) => {
+      const status = (project.status as string) || 'Pending';
+
+      if (status !== 'Approved') {
+        upcoming.push(project);
+        return;
+      }
+
+      const rawSchedule: Array<{ activityId?: number; startAt?: string; endAt?: string }> = Array.isArray(
+        (project as any).activitySchedule,
+      )
+        ? ((project as any).activitySchedule as any[])
+        : [];
+
+      if (rawSchedule.length === 0) {
+        // Approved project with no schedule yet: treat as approved (not for-approval).
+        ongoing.push(project);
+        return;
+      }
+
+      let anyOngoing = false;
+      let allEnded = rawSchedule.length > 0;
+
+      rawSchedule.forEach((item) => {
+        const startMs = item.startAt ? new Date(item.startAt).getTime() : NaN;
+        const endMs = item.endAt ? new Date(item.endAt).getTime() : NaN;
+        const hasStart = Number.isFinite(startMs);
+        const hasEnd = Number.isFinite(endMs);
+        const isOngoing = hasStart && hasEnd && startMs <= now && now <= endMs;
+        const isEnded = hasEnd && endMs < now;
+
+        if (isOngoing) {
+          anyOngoing = true;
+        }
+        if (!isEnded) {
+          allEnded = false;
+        }
+      });
+
+      if (anyOngoing) {
+        ongoing.push(project);
+      } else if (allEnded) {
+        completed.push(project);
+      } else {
+        // Approved project with only future activities: still considered approved (not for-approval).
+        ongoing.push(project);
+      }
+    });
+
+    return { upcomingLeaderProjects: upcoming, ongoingLeaderProjects: ongoing, completedLeaderProjects: completed };
+  }, [projects, nowMs]);
+
+  const canExtendActivitiesForCurrentProject = useMemo(() => {
+    if (!activitiesModalProject || activitiesForModal.length === 0) {
+      // If there are no activities yet, allow defining extension activities.
+      return true;
+    }
+
+    const now = nowMs;
+
+    // If at least one activity is not expired, we still allow extensions.
+    return activitiesForModal.some((activity) => {
+      const startDate = activity.startAt ? new Date(activity.startAt) : undefined;
+      const endDate = activity.endAt ? new Date(activity.endAt) : undefined;
+
+      const hasValidStart = !!startDate && !Number.isNaN(startDate.getTime());
+      const hasValidEnd = !!endDate && !Number.isNaN(endDate.getTime());
+
+      const isExpired = hasValidEnd && endDate!.getTime() < now;
+
+      // Treat activities without a clear expired flag as still extendable.
+      if (!hasValidStart && !hasValidEnd) {
+        return true;
+      }
+
+      return !isExpired;
+    });
+  }, [activitiesForModal, activitiesModalProject, nowMs]);
+
+  const selectedProjectIsCompleted = useMemo(() => {
+    if (!activitiesModalProject) return false;
+    return completedLeaderProjects.some((p) => p._id === activitiesModalProject._id);
+  }, [activitiesModalProject, completedLeaderProjects]);
 
   const proposalSections = useMemo(
     () => [
@@ -1448,6 +1658,125 @@ export default function ProjectLeaderProjectsPage() {
     setAttendanceViewOpen(true);
   };
 
+  const openTerminalReportForCurrentProject = async () => {
+    if (!activitiesModalProject) {
+      return;
+    }
+
+    setTerminalReportOpen(true);
+    setTerminalReportLoading(true);
+    setTerminalReportError(null);
+    setTerminalReportTotals(null);
+
+    try {
+      const projectId = activitiesModalProject._id;
+      const now = nowMs;
+
+      const endedActivities = activitiesForModal.filter((activity) => {
+        const endDate = activity.endAt ? new Date(activity.endAt) : undefined;
+        const hasValidEnd = !!endDate && !Number.isNaN(endDate.getTime());
+        return hasValidEnd && endDate!.getTime() < now;
+      });
+
+      const totalActivities = endedActivities.length;
+
+      let totalRegistrations = 0;
+      let present = 0;
+      let absent = 0;
+      const activitySummaries: Array<{ title: string; present: number; absent: number; total: number }> = [];
+
+      let activeBeneficiaryEmails = new Set<string>();
+      try {
+        const benRes = await fetch(`http://localhost:5000/api/projects/${projectId}/beneficiaries`);
+        if (benRes.ok) {
+          const benData = (await benRes.json()) as Array<{
+            email: string;
+            status: 'active' | 'removed';
+          }>;
+          benData
+            .filter((b) => b.status === 'active')
+            .forEach((b) => {
+              const email = typeof b.email === 'string' ? b.email.trim() : '';
+              if (email) {
+                activeBeneficiaryEmails.add(email);
+              }
+            });
+        }
+      } catch {
+        activeBeneficiaryEmails = new Set<string>();
+      }
+
+      const registrationEmails = new Set<string>();
+
+      for (const activity of endedActivities) {
+        let activityPresent = 0;
+        let activityAbsent = 0;
+        let activityTotal = 0;
+        try {
+          const regRes = await fetch(
+            `http://localhost:5000/api/projects/${projectId}/activities/${activity.activityId}/registrations`,
+          );
+          if (!regRes.ok) {
+            continue;
+          }
+
+          const regData = (await regRes.json()) as Array<{
+            participantEmail: string;
+            status: 'registered' | 'present' | 'absent';
+          }>;
+
+          totalRegistrations += regData.length;
+
+          regData.forEach((row) => {
+            const email = typeof row.participantEmail === 'string' ? row.participantEmail.trim() : '';
+            if (email) {
+              registrationEmails.add(email);
+            }
+            if (row.status === 'present') {
+              present += 1;
+              activityPresent += 1;
+            } else if (row.status === 'absent') {
+              absent += 1;
+              activityAbsent += 1;
+            }
+            activityTotal += 1;
+          });
+        } catch {
+          continue;
+        }
+
+        activitySummaries.push({
+          title: activity.title,
+          present: activityPresent,
+          absent: activityAbsent,
+          total: activityTotal,
+        });
+      }
+
+      let matched = 0;
+      activeBeneficiaryEmails.forEach((email) => {
+        if (registrationEmails.has(email)) {
+          matched += 1;
+        }
+      });
+
+      const notOnAttendance = Math.max(activeBeneficiaryEmails.size - matched, 0);
+
+      setTerminalReportTotals({
+        totalActivities,
+        totalRegistrations,
+        present,
+        absent,
+        notOnAttendance,
+        activities: activitySummaries,
+      });
+    } catch (error: any) {
+      setTerminalReportError(error.message || 'Failed to load terminal report');
+    } finally {
+      setTerminalReportLoading(false);
+    }
+  };
+
   const handleAttendanceUpdate = async (email: string, status: 'present' | 'absent') => {
     if (!activitiesModalProject || !attendanceActivity) {
       return;
@@ -2034,126 +2363,56 @@ export default function ProjectLeaderProjectsPage() {
                 Once a project is added, it will appear here with quick access to its timeline and beneficiaries.
               </p>
               <div className="flex flex-wrap justify-center gap-3">
-                <button onClick={openCreatePanel} className="flex items-center gap-2 rounded-lg bg-yellow-500 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-yellow-600">
+                <button
+                  onClick={openCreatePanel}
+                  className="flex items-center gap-2 rounded-lg bg-yellow-500 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-yellow-600"
+                >
                   <PlusCircle className="h-4 w-4" />
                   New Project
                 </button>
               </div>
             </div>
           ) : (
-            <div className="space-y-4">
+            <div className="space-y-6">
               <div className="flex items-center justify-between gap-2">
                 <div>
                   <h2 className="text-lg font-semibold text-gray-900">Your projects</h2>
-                  <p className="text-xs text-gray-500">Recently saved proposals appear here so you can review or continue editing.</p>
+                  <p className="text-xs text-gray-500">
+                    Recently saved proposals appear here so you can review or continue editing.
+                  </p>
                 </div>
               </div>
-              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-                {projects.map((project) => {
-                  const status = project.status || 'Pending';
-                  const statusLabel =
-                    status === 'Approved'
-                      ? 'Approved'
-                      : status === 'Rejected'
-                      ? 'Rejected'
-                      : 'Pending approval';
-                  const hasEvaluation = !!project.evaluation;
-                  const isHighlighted = project._id === highlightProjectId;
-
-                  return (
-                    <div
-                      key={project._id}
-                      onClick={() => {
-                        openReviewPanel(project._id);
-                      }}
-                      className={`flex h-full flex-col rounded-2xl border bg-white/90 p-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-lg ${
-                        isHighlighted
-                          ? 'border-yellow-400 shadow-yellow-300 ring-2 ring-yellow-300 animate-pulse'
-                          : 'border-yellow-100'
-                      } cursor-pointer`}
-                    >
-                      <div className="flex-1 space-y-1">
-                        <h3 className="text-sm font-semibold text-gray-900 line-clamp-2">{project.name}</h3>
-                        <p className="text-xs text-gray-600 line-clamp-3">{project.description}</p>
-                      </div>
-                      <div className="mt-4 flex items-center justify-between gap-2 text-xs">
-                        <div className="flex flex-col gap-1">
-                          <span className="inline-flex items-center rounded-full bg-yellow-50 px-2 py-0.5 font-semibold text-yellow-700">
-                            {statusLabel}
-                          </span>
-                          {hasEvaluation && (
-                            <span className="inline-flex items-center rounded-full border border-emerald-100 bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-700">
-                              Evaluated
-                            </span>
-                          )}
-                        </div>
-                        <div className="relative flex items-center gap-2">
-                          {status === 'Approved' && (
-                            <button
-                              type="button"
-                              onClick={(event) => {
-                                event.stopPropagation();
-                                openActivitiesModal(project);
-                              }}
-                              className="rounded-full border border-yellow-200 px-3 py-1 font-semibold text-yellow-700 transition hover:bg-yellow-50"
-                            >
-                              View activities
-                            </button>
-                          )}
-                          <button
-                            type="button"
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              setOptionsOpenProjectId((current) =>
-                                current === project._id ? null : project._id,
-                              );
-                            }}
-                            className="rounded-full border border-yellow-200 px-3 py-1 font-semibold text-yellow-700 transition hover:bg-yellow-50"
-                          >
-                            Options
-                          </button>
-                          {optionsOpenProjectId === project._id && (
-                            <div className="absolute right-0 z-10 mt-1 w-44 rounded-lg border border-yellow-100 bg-white py-1 text-left text-[11px] shadow-lg">
-                              {hasEvaluation && (
-                                <button
-                                  type="button"
-                                  onClick={(event) => {
-                                    event.stopPropagation();
-                                    setEvaluationViewProject(project);
-                                    setOptionsOpenProjectId(null);
-                                  }}
-                                  className="block w-full px-3 py-1.5 text-left text-emerald-700 hover:bg-emerald-50"
-                                >
-                                  View evaluation
-                                </button>
-                              )}
-                              <button
-                                type="button"
-                                onClick={(event) => {
-                                  event.stopPropagation();
-                                  handleDeleteProject(project._id);
-                                }}
-                                className="block w-full px-3 py-1.5 text-left text-red-600 hover:bg-red-50"
-                              >
-                                Delete
-                              </button>
-                              <button
-                                type="button"
-                                onClick={(event) => {
-                                  event.stopPropagation();
-                                  setOptionsOpenProjectId(null);
-                                }}
-                                className="block w-full px-3 py-1.5 text-left text-gray-700 hover:bg-yellow-50"
-                              >
-                                Close
-                              </button>
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
+              <div className="grid gap-6 md:grid-cols-2 xl:grid-cols-3">
+                <div className="space-y-3">
+                  <h3 className="text-sm font-semibold text-gray-900">For approval projects</h3>
+                  <div className="space-y-3">
+                    {upcomingLeaderProjects.length === 0 ? (
+                      <p className="text-xs text-gray-600">No projects for approval.</p>
+                    ) : (
+                      upcomingLeaderProjects.map((project) => renderProjectCard(project))
+                    )}
+                  </div>
+                </div>
+                <div className="space-y-3">
+                  <h3 className="text-sm font-semibold text-gray-900">Approved projects</h3>
+                  <div className="space-y-3">
+                    {ongoingLeaderProjects.length === 0 ? (
+                      <p className="text-xs text-gray-600">No approved projects.</p>
+                    ) : (
+                      ongoingLeaderProjects.map((project) => renderProjectCard(project))
+                    )}
+                  </div>
+                </div>
+                <div className="space-y-3">
+                  <h3 className="text-sm font-semibold text-gray-900">Completed / Ended projects</h3>
+                  <div className="space-y-3">
+                    {completedLeaderProjects.length === 0 ? (
+                      <p className="text-xs text-gray-600">No completed or ended projects.</p>
+                    ) : (
+                      completedLeaderProjects.map((project) => renderProjectCard(project))
+                    )}
+                  </div>
+                </div>
               </div>
             </div>
           )}
@@ -2315,154 +2574,6 @@ export default function ProjectLeaderProjectsPage() {
         </div>
       )}
 
-      {extensionModalOpen && activitiesModalProject && (
-        <div
-          className="fixed inset-0 z-50 flex bg-black/40 backdrop-blur-sm"
-          role="dialog"
-          aria-modal="true"
-        >
-          <div className="mx-auto my-8 flex h-[calc(100%-4rem)] w-full max-w-5xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
-            <div className="flex items-center justify-between border-b border-yellow-100 px-6 py-4">
-              <div className="space-y-1">
-                <p className="text-xs font-semibold uppercase tracking-wide text-yellow-500">Extension Activities</p>
-                <h2 className="text-sm font-semibold text-gray-900 line-clamp-1">{activitiesModalProject.name}</h2>
-                <p className="text-[11px] text-gray-500">
-                  Define additional competencies/topics, hours, and resource persons for extended activities.
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setExtensionModalOpen(false)}
-                className="rounded-full border border-yellow-200 px-3 py-1 text-xs font-semibold text-yellow-700 hover:bg-yellow-50"
-              >
-                Close
-              </button>
-            </div>
-
-            <div className="flex-1 overflow-y-auto px-6 py-5 text-xs text-gray-800">
-              {extensionError && (
-                <div className="mb-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-[11px] text-red-700">
-                  {extensionError}
-                </div>
-              )}
-
-              <div className="overflow-x-auto">
-                <table className="w-full min-w-[800px] border border-yellow-200 text-sm text-gray-700">
-                  <thead>
-                    <tr className="bg-yellow-50">
-                      <th className="border border-yellow-200 px-3 py-2 text-left text-xs font-semibold text-gray-800">
-                        Competencies / Topics
-                      </th>
-                      <th className="border border-yellow-200 px-3 py-2 text-left text-xs font-semibold text-gray-800 w-32">
-                        Number of Hours
-                      </th>
-                      <th className="border border-yellow-200 px-3 py-2 text-left text-xs font-semibold text-gray-800">
-                        Resource Person
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {extensionRows.map((row, index) => (
-                      <tr key={`extension-row-${index}`}>
-                        <td className="border border-yellow-200 px-3 py-2 align-top">
-                          <textarea
-                            className="h-16 w-full resize-y rounded border border-yellow-200 px-2 py-1 text-xs text-gray-800 focus:border-yellow-400 focus:outline-none focus:ring-1 focus:ring-yellow-300"
-                            value={row.topic}
-                            onChange={(e) => {
-                              const value = e.target.value;
-                              setExtensionRows((prev) => {
-                                const next = [...prev];
-                                next[index] = { ...next[index], topic: value };
-                                return next;
-                              });
-                            }}
-                          />
-                        </td>
-                        <td className="border border-yellow-200 px-3 py-2 align-top">
-                          <input
-                            type="number"
-                            min="0"
-                            step="0.5"
-                            className="h-9 w-full rounded border border-yellow-200 px-2 text-xs text-gray-800 focus:border-yellow-400 focus:outline-none focus:ring-1 focus:ring-yellow-300"
-                            value={row.hours}
-                            onChange={(e) => {
-                              const value = e.target.value;
-                              setExtensionRows((prev) => {
-                                const next = [...prev];
-                                next[index] = { ...next[index], hours: value };
-                                return next;
-                              });
-                            }}
-                          />
-                        </td>
-                        <td className="border border-yellow-200 px-3 py-2 align-top">
-                          <input
-                            type="text"
-                            className="h-9 w-full rounded border border-yellow-200 px-2 text-xs text-gray-800 focus:border-yellow-400 focus:outline-none focus:ring-1 focus:ring-yellow-300"
-                            value={row.resourcePerson}
-                            onChange={(e) => {
-                              const value = e.target.value;
-                              setExtensionRows((prev) => {
-                                const next = [...prev];
-                                next[index] = { ...next[index], resourcePerson: value };
-                                return next;
-                              });
-                            }}
-                          />
-                        </td>
-                      </tr>
-                    ))}
-                    <tr>
-                      <td className="border border-yellow-200 px-3 py-2 text-right text-xs font-semibold text-gray-800">
-                        Total Hours
-                      </td>
-                      <td className="border border-yellow-200 px-3 py-2 text-sm font-semibold text-gray-900">
-                        {extensionRows
-                          .map((row) => Number.parseFloat(row.hours || '0'))
-                          .filter((value) => Number.isFinite(value) && value >= 0)
-                          .reduce((sum, value) => sum + value, 0)}
-                      </td>
-                      <td className="border border-yellow-200 px-3 py-2" />
-                    </tr>
-                  </tbody>
-                </table>
-              </div>
-
-              <div className="mt-4 flex justify-between text-xs">
-                <div className="flex gap-2">
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setExtensionRows((prev) => [...prev, { topic: '', hours: '', resourcePerson: '' }])
-                    }
-                    className="rounded-full border border-yellow-200 px-3 py-1 font-semibold text-yellow-700 transition hover:bg-yellow-50"
-                  >
-                    Add row
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setExtensionRows((prev) => (prev.length > 1 ? prev.slice(0, -1) : prev))
-                    }
-                    className="rounded-full border border-yellow-200 px-3 py-1 font-semibold text-yellow-700 transition hover:bg-yellow-50"
-                  >
-                    Delete row
-                  </button>
-                </div>
-                <button
-                  type="button"
-                  disabled={extensionSaving}
-                  onClick={handleSaveExtensionActivities}
-                  className="rounded-full border border-emerald-300 bg-emerald-50 px-4 py-1 text-xs font-semibold text-emerald-700 hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  {extensionSaving ? 'Saving…' : 'Save activities'}
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
       {activitiesModalOpen && activitiesModalProject && (
         <div
           className="fixed inset-0 z-40 flex bg-black/40 backdrop-blur-sm"
@@ -2484,10 +2595,17 @@ export default function ProjectLeaderProjectsPage() {
               <div className="flex items-center gap-2">
                 <button
                   type="button"
-                  onClick={openExtensionActivitiesModal}
-                  className="rounded-full border border-yellow-200 px-3 py-1 text-xs font-semibold text-yellow-700 hover:bg-yellow-50"
+                  onClick={() => {
+                    if (selectedProjectIsCompleted) {
+                      openTerminalReportForCurrentProject();
+                    } else {
+                      openExtensionActivitiesModal();
+                    }
+                  }}
+                  disabled={!selectedProjectIsCompleted && !canExtendActivitiesForCurrentProject}
+                  className="rounded-full border border-yellow-200 px-3 py-1 text-xs font-semibold text-yellow-700 hover:bg-yellow-50 disabled:cursor-not-allowed disabled:opacity-60"
                 >
-                  Add / extend activities
+                  {selectedProjectIsCompleted ? 'Terminal reports' : 'Add / extend activities'}
                 </button>
                 <button
                   type="button"
@@ -2524,16 +2642,13 @@ export default function ProjectLeaderProjectsPage() {
                     const startDate = activity.startAt ? new Date(activity.startAt) : undefined;
                     const endDate = activity.endAt ? new Date(activity.endAt) : undefined;
 
-                    const hasValidStart =
-                      !!startDate && !Number.isNaN(startDate.getTime());
-                    const hasValidEnd =
-                      !!endDate && !Number.isNaN(endDate.getTime());
+                    const hasValidStart = !!startDate && !Number.isNaN(startDate.getTime());
+                    const hasValidEnd = !!endDate && !Number.isNaN(endDate.getTime());
 
                     const isExpired = hasValidEnd && endDate!.getTime() < now;
                     const isOngoing =
                       hasValidStart && hasValidEnd && startDate!.getTime() <= now && now <= endDate!.getTime();
-                    const isUpcoming =
-                      hasValidStart && !isOngoing && !isExpired && startDate!.getTime() > now;
+                    const isUpcoming = hasValidStart && !isOngoing && !isExpired && startDate!.getTime() > now;
 
                     return (
                       <div
@@ -2561,7 +2676,7 @@ export default function ProjectLeaderProjectsPage() {
                           )}
                           {(hasStart || hasEnd) && (
                             <span className="rounded-full bg-white px-2 py-0.5 font-medium text-gray-700">
-                              {hasStart && (
+                              {hasStart && startValue && (
                                 <>
                                   Start:{' '}
                                   {new Date(startValue).toLocaleString('en-PH', {
@@ -2570,7 +2685,7 @@ export default function ProjectLeaderProjectsPage() {
                                   })}
                                 </>
                               )}
-                              {hasEnd && (
+                              {hasEnd && endValue && (
                                 <>
                                   {hasStart ? ' · ' : ''}
                                   End:{' '}
@@ -2580,21 +2695,20 @@ export default function ProjectLeaderProjectsPage() {
                                   })}
                                 </>
                               )}
-                              {isExpired && ' · Expired'}
                             </span>
                           )}
                           {isUpcoming && (
-                            <span className="inline-flex items-center rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-[10px] font-semibold text-blue-600">
+                            <span className="inline-flex items-center rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 font-semibold text-blue-600">
                               Upcoming
                             </span>
                           )}
                           {isOngoing && (
-                            <span className="inline-flex items-center rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold text-emerald-600">
+                            <span className="inline-flex items-center rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 font-semibold text-emerald-600">
                               Ongoing
                             </span>
                           )}
                           {isExpired && (
-                            <span className="inline-flex items-center rounded-full border border-red-200 bg-red-50 px-2 py-0.5 text-[10px] font-semibold text-red-600">
+                            <span className="inline-flex items-center rounded-full border border-red-200 bg-red-50 px-2 py-0.5 font-semibold text-red-600">
                               Ended
                             </span>
                           )}
@@ -2602,6 +2716,186 @@ export default function ProjectLeaderProjectsPage() {
                       </div>
                     );
                   })}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {terminalReportOpen && activitiesModalProject && (
+        <div
+          className="fixed inset-0 z-50 flex bg-black/50 backdrop-blur-sm"
+          role="dialog"
+          aria-modal="true"
+        >
+          <div className="mx-auto my-8 flex h-[calc(100%-4rem)] w-full max-w-4xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
+            <div className="flex items-center justify-between border-b border-yellow-100 px-6 py-4">
+              <div className="space-y-0.5">
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-yellow-500">Terminal report</p>
+                <h2 className="text-base font-semibold text-gray-900 line-clamp-1">{activitiesModalProject.name}</h2>
+                <p className="text-[11px] text-gray-500">Summary of attendance across all completed activities for this project.</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setTerminalReportOpen(false)}
+                className="rounded-full border border-yellow-200 px-3 py-1 text-xs font-semibold text-yellow-700 hover:bg-yellow-50"
+              >
+                Close
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto px-6 py-5 text-xs text-gray-800 bg-gradient-to-b from-yellow-50/40 via-white to-white">
+              {terminalReportLoading && (
+                <p className="text-xs text-gray-600">Loading terminal report…</p>
+              )}
+              {!terminalReportLoading && terminalReportError && (
+                <p className="text-xs text-red-600">{terminalReportError}</p>
+              )}
+              {!terminalReportLoading && !terminalReportError && terminalReportTotals && (
+                <div className="space-y-6">
+                  <section className="space-y-3">
+                    <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">Overall summary</p>
+                    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                      <div className="rounded-xl border border-yellow-100 bg-white px-4 py-3 shadow-sm">
+                        <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">Ended activities</p>
+                        <p className="mt-1 text-2xl font-bold text-gray-900">{terminalReportTotals.totalActivities}</p>
+                      </div>
+                      <div className="rounded-xl border border-yellow-100 bg-white px-4 py-3 shadow-sm">
+                        <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">Total registrations</p>
+                        <p className="mt-1 text-2xl font-bold text-gray-900">{terminalReportTotals.totalRegistrations}</p>
+                      </div>
+                      <div className="rounded-xl border border-emerald-100 bg-emerald-50/70 px-4 py-3 shadow-sm">
+                        <p className="text-[11px] font-semibold uppercase tracking-wide text-emerald-700">Present</p>
+                        <p className="mt-1 text-2xl font-bold text-emerald-900">{terminalReportTotals.present}</p>
+                      </div>
+                      <div className="rounded-xl border border-red-100 bg-red-50/70 px-4 py-3 shadow-sm">
+                        <p className="text-[11px] font-semibold uppercase tracking-wide text-red-700">Absent</p>
+                        <p className="mt-1 text-2xl font-bold text-red-900">{terminalReportTotals.absent}</p>
+                      </div>
+                    </div>
+                  </section>
+
+                  <section className="space-y-3">
+                    <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">Attendance coverage</p>
+                    <div className="grid items-center gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,1.4fr)]">
+                      <div className="space-y-2">
+                        <p className="text-[11px] text-gray-600">
+                          Distribution of beneficiaries across present, absent, and never appeared in attendance.
+                        </p>
+                        {(() => {
+                          const totalOverall =
+                            terminalReportTotals.present +
+                              terminalReportTotals.absent +
+                              terminalReportTotals.notOnAttendance || 1;
+                          const presentPct = (terminalReportTotals.present / totalOverall) * 100;
+                          const absentPct = (terminalReportTotals.absent / totalOverall) * 100;
+                          const noaPct = (terminalReportTotals.notOnAttendance / totalOverall) * 100;
+                          return (
+                            <div className="overflow-hidden rounded-full border border-yellow-100 bg-gray-100">
+                              <div className="flex h-4 w-full">
+                                <div
+                                  className="h-4 bg-emerald-500/85"
+                                  style={{ width: `${presentPct}%` }}
+                                  title={`Present ${terminalReportTotals.present}`}
+                                />
+                                <div
+                                  className="h-4 bg-red-400/85"
+                                  style={{ width: `${absentPct}%` }}
+                                  title={`Absent ${terminalReportTotals.absent}`}
+                                />
+                                <div
+                                  className="h-4 bg-gray-400/80"
+                                  style={{ width: `${noaPct}%` }}
+                                  title={`Not on attendance ${terminalReportTotals.notOnAttendance}`}
+                                />
+                              </div>
+                            </div>
+                          );
+                        })()}
+                        <div className="flex flex-wrap gap-4 text-[11px] text-gray-600">
+                          <span className="inline-flex items-center gap-1">
+                            <span className="inline-block h-2 w-2 rounded-full bg-emerald-500/85" /> Present
+                            <span className="text-[10px] text-gray-500">({terminalReportTotals.present})</span>
+                          </span>
+                          <span className="inline-flex items-center gap-1">
+                            <span className="inline-block h-2 w-2 rounded-full bg-red-400/85" /> Absent
+                            <span className="text-[10px] text-gray-500">({terminalReportTotals.absent})</span>
+                          </span>
+                          <span className="inline-flex items-center gap-1">
+                            <span className="inline-block h-2 w-2 rounded-full bg-gray-400/80" /> Not on attendance
+                            <span className="text-[10px] text-gray-500">
+                              ({terminalReportTotals.notOnAttendance})
+                            </span>
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="rounded-xl border border-yellow-100 bg-white px-4 py-3 shadow-sm">
+                        <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">Quick ratios</p>
+                        <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                          {(() => {
+                            const totalOverall =
+                              terminalReportTotals.present +
+                                terminalReportTotals.absent +
+                                terminalReportTotals.notOnAttendance || 1;
+                            const presentPct = Math.round((terminalReportTotals.present / totalOverall) * 100);
+                            const absentPct = Math.round((terminalReportTotals.absent / totalOverall) * 100);
+                            const noaPct = Math.round((terminalReportTotals.notOnAttendance / totalOverall) * 100);
+                            return (
+                              <>
+                                <div className="space-y-0.5">
+                                  <p className="text-[11px] text-gray-500">Present rate</p>
+                                  <p className="text-sm font-semibold text-emerald-700">{presentPct}%</p>
+                                </div>
+                                <div className="space-y-0.5">
+                                  <p className="text-[11px] text-gray-500">Absent rate</p>
+                                  <p className="text-sm font-semibold text-red-700">{absentPct}%</p>
+                                </div>
+                                <div className="space-y-0.5">
+                                  <p className="text-[11px] text-gray-500">Not on attendance</p>
+                                  <p className="text-sm font-semibold text-gray-800">{noaPct}%</p>
+                                </div>
+                              </>
+                            );
+                          })()}
+                        </div>
+                      </div>
+                    </div>
+                  </section>
+
+                  {terminalReportTotals.activities.length > 0 && (
+                    <section className="space-y-2">
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">By activity</p>
+                      <div className="overflow-x-auto rounded-xl border border-yellow-100 bg-white">
+                        <table className="min-w-full border-collapse text-[11px] text-gray-800">
+                          <thead>
+                            <tr className="bg-yellow-50 text-gray-700">
+                              <th className="border-b border-yellow-100 px-3 py-2 text-left font-semibold">Activity</th>
+                              <th className="border-b border-yellow-100 px-3 py-2 text-right font-semibold">Present</th>
+                              <th className="border-b border-yellow-100 px-3 py-2 text-right font-semibold">Absent</th>
+                              <th className="border-b border-yellow-100 px-3 py-2 text-right font-semibold">Total</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {terminalReportTotals.activities.map((row, index) => (
+                              <tr
+                                key={`${row.title}-${index}`}
+                                className={index % 2 === 0 ? 'bg-white' : 'bg-yellow-50/40'}
+                              >
+                                <td className="px-3 py-2 text-left align-top">
+                                  <span className="line-clamp-2 text-[11px] font-medium text-gray-900">{row.title}</span>
+                                </td>
+                                <td className="px-3 py-2 text-right align-top text-emerald-700 font-semibold">{row.present}</td>
+                                <td className="px-3 py-2 text-right align-top text-red-700 font-semibold">{row.absent}</td>
+                                <td className="px-3 py-2 text-right align-top font-semibold text-gray-900">{row.total}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </section>
+                  )}
                 </div>
               )}
             </div>
@@ -2678,7 +2972,9 @@ export default function ProjectLeaderProjectsPage() {
                                 <input
                                   type="datetime-local"
                                   value={startValue}
+                                  disabled={isExpired}
                                   onChange={(e) => {
+                                    if (isExpired) return;
                                     const value = e.target.value;
                                     setActivityScheduleDrafts((prev) => ({
                                       ...prev,
@@ -2697,7 +2993,9 @@ export default function ProjectLeaderProjectsPage() {
                                 <input
                                   type="datetime-local"
                                   value={endValue}
+                                  disabled={isExpired}
                                   onChange={(e) => {
+                                    if (isExpired) return;
                                     const value = e.target.value;
                                     setActivityScheduleDrafts((prev) => ({
                                       ...prev,
@@ -2716,7 +3014,9 @@ export default function ProjectLeaderProjectsPage() {
                                 <input
                                   type="text"
                                   value={locationValue}
+                                  disabled={isExpired}
                                   onChange={(e) => {
+                                    if (isExpired) return;
                                     const value = e.target.value;
                                     setActivityScheduleDrafts((prev) => ({
                                       ...prev,
@@ -2733,7 +3033,7 @@ export default function ProjectLeaderProjectsPage() {
                               </label>
                               <button
                                 type="button"
-                                disabled={activityScheduleSavingKey === scheduleKey}
+                                disabled={activityScheduleSavingKey === scheduleKey || isExpired}
                                 onClick={() =>
                                   handleSaveActivitySchedule(
                                     activitiesModalProject._id,

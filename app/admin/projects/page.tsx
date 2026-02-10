@@ -28,7 +28,7 @@ export default function AdminProjectsPage() {
   const [beneficiariesOpen, setBeneficiariesOpen] = useState(false);
   const [beneficiariesProject, setBeneficiariesProject] = useState<AdminProject | null>(null);
   const [beneficiaries, setBeneficiaries] = useState<
-    Array<{ email: string; status: 'active' | 'removed'; joinedAt?: string; updatedAt?: string }>
+    Array<{ email: string; status: 'active' | 'removed'; joinedAt?: string; updatedAt?: string; fullName?: string }>
   >([]);
   const [beneficiariesLoading, setBeneficiariesLoading] = useState(false);
   const [beneficiariesError, setBeneficiariesError] = useState<string | null>(null);
@@ -182,6 +182,7 @@ export default function AdminProjectsPage() {
           status: 'active' | 'removed';
           joinedAt?: string;
           updatedAt?: string;
+          fullName?: string;
         }>;
 
         if (!cancelled) {
@@ -210,11 +211,12 @@ export default function AdminProjectsPage() {
       return;
     }
 
-    const header = ['Email', 'Status', 'Joined at', 'Last updated'];
+    const header = ['Email', 'Full name', 'Status', 'Joined at', 'Last updated'];
     const rows = beneficiaries.map((row) => {
       const joined = row.joinedAt ? new Date(row.joinedAt).toLocaleString('en-PH') : '';
       const updated = row.updatedAt ? new Date(row.updatedAt).toLocaleString('en-PH') : '';
-      return [row.email, row.status, joined, updated];
+      const displayName = (row as any).fullName || row.email;
+      return [row.email, displayName, row.status, joined, updated];
     });
 
     const csv = [header, ...rows]
@@ -639,21 +641,20 @@ export default function AdminProjectsPage() {
                 </div>
               </div>
             )}
-
-            {forApprovalProjects.length === 0 &&
-              approvedProjects.length === 0 &&
-              endedProjects.length === 0 && (
-                <div className="text-center text-sm text-gray-600">
-                  No project proposals have been submitted yet.
-                </div>
-              )}
           </div>
         )}
+        {forApprovalProjects.length === 0 &&
+          approvedProjects.length === 0 &&
+          endedProjects.length === 0 && (
+            <div className="text-center text-sm text-gray-600">
+              No project proposals have been submitted yet.
+            </div>
+          )}
       </section>
 
       {exportPreviewOpen && exportPreviewKind && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4" role="dialog" aria-modal="true">
-          <div className="w-full max-w-md rounded-2xl border border-amber-100 bg-white p-5 text-sm text-gray-800 shadow-xl">
+          <div className="w-full max-w-2xl rounded-2xl border border-amber-100 bg-white p-5 text-sm text-gray-800 shadow-xl">
             <div className="mb-3 flex items-start justify-between gap-3">
               <div>
                 <p className="text-xs font-semibold uppercase tracking-wide text-amber-500">Export preview</p>
@@ -683,60 +684,63 @@ export default function AdminProjectsPage() {
                   <div className="rounded-lg border border-dashed border-amber-200 bg-amber-50/60 px-3 py-2">
                     <p className="font-semibold text-gray-900">File name</p>
                     <p className="text-[11px] text-gray-700">unihub-project-summary.xlsx</p>
-                    <p className="mt-1 text-[11px] text-gray-500">
-                      Format: Microsoft Excel (.xlsx)
-                    </p>
+                    <p className="mt-1 text-[11px] text-gray-500">Format: Microsoft Excel (.xlsx)</p>
                   </div>
                 </>
               ) : (
                 <>
-                  <p className="text-gray-700">
-                    You are about to export the beneficiaries list for this project as a CSV file.
-                  </p>
-                  <div className="rounded-lg border border-dashed border-amber-200 bg-amber-50/60 px-3 py-2">
-                    <p className="font-semibold text-gray-900">Approximate rows</p>
-                    <p className="text-[11px] text-gray-700">
-                      {beneficiaries.length > 0
-                        ? `${beneficiaries.length} beneficiary record${beneficiaries.length === 1 ? '' : 's'}`
-                        : 'No beneficiaries loaded. Open a project and view beneficiaries first.'}
+                  <div className="space-y-1">
+                    <p className="text-gray-700">
+                      You are about to export the beneficiaries list for this project as a CSV file.
                     </p>
-                    <p className="mt-1 text-[11px] text-gray-500">Format: Comma-separated values (.csv)</p>
+                    {beneficiariesProject && (
+                      <p className="text-[11px] text-gray-500">
+                        Project: <span className="font-semibold text-gray-800">{beneficiariesProject.name}</span>
+                      </p>
+                    )}
+                  </div>
+                  <div className="mt-2 rounded-lg border border-dashed border-amber-200 bg-amber-50/70 px-3 py-2">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <p className="text-[11px] font-semibold uppercase tracking-wide text-amber-700">Approximate rows</p>
+                        <p className="text-[11px] text-gray-700">
+                          {beneficiaries.length > 0
+                            ? `${beneficiaries.length} beneficiary record${beneficiaries.length === 1 ? '' : 's'}`
+                            : 'No beneficiaries loaded. Open a project and view beneficiaries first.'}
+                        </p>
+                      </div>
+                      <div className="rounded-full bg-white px-3 py-1 text-[10px] font-semibold uppercase tracking-wide text-amber-700 border border-amber-200">
+                        CSV format
+                      </div>
+                    </div>
+                    <p className="mt-1 text-[11px] text-gray-500">Each row will contain name, email and timestamps.</p>
                   </div>
                   {beneficiaries.length > 0 && (
-                    <div className="mt-2 rounded-lg border border-amber-100 bg-white/80">
-                      <div className="max-h-48 overflow-auto">
+                    <div className="mt-3 rounded-lg border border-amber-100 bg-white/90 shadow-sm">
+                      <div className="max-h-48 overflow-auto min-w-[36rem]">
                         <table className="min-w-full border-collapse text-[11px]">
                           <thead>
-                            <tr className="bg-amber-50 text-[10px] uppercase tracking-wide text-gray-600">
-                              <th className="border-b border-amber-100 px-2 py-1 text-left font-semibold">Email</th>
-                              <th className="border-b border-amber-100 px-2 py-1 text-left font-semibold">Status</th>
-                              <th className="border-b border-amber-100 px-2 py-1 text-left font-semibold">Joined at</th>
-                              <th className="border-b border-amber-100 px-2 py-1 text-left font-semibold">Last updated</th>
+                            <tr className="bg-amber-50/80 text-[10px] uppercase tracking-wide text-gray-600">
+                              <th className="border-b border-amber-100 px-3 py-1.5 text-left font-semibold whitespace-nowrap">Name</th>
+                              <th className="border-b border-amber-100 px-3 py-1.5 text-left font-semibold">Email</th>
+                              <th className="border-b border-amber-100 px-3 py-1.5 text-left font-semibold">Joined at</th>
+                              <th className="border-b border-amber-100 px-3 py-1.5 text-left font-semibold">Last updated</th>
                             </tr>
                           </thead>
                           <tbody>
                             {beneficiaries.map((row) => {
-                              const joined = row.joinedAt
-                                ? new Date(row.joinedAt).toLocaleString('en-PH')
-                                : '';
-                              const updated = row.updatedAt
-                                ? new Date(row.updatedAt).toLocaleString('en-PH')
-                                : '';
+                              const joined = row.joinedAt ? new Date(row.joinedAt).toLocaleString('en-PH') : '';
+                              const updated = row.updatedAt ? new Date(row.updatedAt).toLocaleString('en-PH') : '';
+                              const displayName = (row as any).fullName || row.email;
 
                               return (
                                 <tr key={row.email} className="odd:bg-white even:bg-amber-50/40">
-                                  <td className="border-b border-amber-50 px-2 py-1 align-top text-gray-900">
-                                    {row.email}
+                                  <td className="border-b border-amber-50 px-3 py-1.5 align-top text-gray-900 whitespace-nowrap">
+                                    {displayName}
                                   </td>
-                                  <td className="border-b border-amber-50 px-2 py-1 align-top capitalize text-gray-700">
-                                    {row.status}
-                                  </td>
-                                  <td className="border-b border-amber-50 px-2 py-1 align-top text-gray-700">
-                                    {joined}
-                                  </td>
-                                  <td className="border-b border-amber-50 px-2 py-1 align-top text-gray-700">
-                                    {updated}
-                                  </td>
+                                  <td className="border-b border-amber-50 px-3 py-1.5 align-top text-gray-700">{row.email}</td>
+                                  <td className="border-b border-amber-50 px-3 py-1.5 align-top text-gray-700">{joined}</td>
+                                  <td className="border-b border-amber-50 px-3 py-1.5 align-top text-gray-700">{updated}</td>
                                 </tr>
                               );
                             })}
@@ -1150,7 +1154,7 @@ export default function AdminProjectsPage() {
           }}
         >
           <div
-            className="ml-auto flex h-full w-full max-w-2xl flex-col bg-white shadow-2xl"
+            className="ml-auto flex h-full w-full max-w-5xl flex-col bg-white shadow-2xl"
             style={{
               transform: beneficiariesOpen ? 'translateX(0%)' : 'translateX(100%)',
               transition: 'transform 260ms cubic-bezier(0.22, 0.61, 0.36, 1)',
@@ -1199,14 +1203,14 @@ export default function AdminProjectsPage() {
                 </div>
               ) : (
                 <div className="overflow-x-auto">
-                  <table className="min-w-full border border-amber-100 text-xs">
+                  <table className="w-full min-w-[52rem] border border-amber-100 text-xs">
                     <thead>
                       <tr className="bg-amber-50">
                         <th className="border border-amber-100 px-3 py-2 text-left font-semibold text-gray-700">
                           Email
                         </th>
                         <th className="border border-amber-100 px-3 py-2 text-left font-semibold text-gray-700">
-                          Status
+                          Full name
                         </th>
                         <th className="border border-amber-100 px-3 py-2 text-left font-semibold text-gray-700">
                           Joined at
@@ -1221,27 +1225,20 @@ export default function AdminProjectsPage() {
                     </thead>
                     <tbody>
                       {beneficiaries.map((row) => {
-                        const statusColor =
-                          row.status === 'active'
-                            ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                            : 'bg-red-50 text-red-700 border-red-200';
+                        const displayName = (row as any).fullName || row.email;
 
                         return (
                           <tr key={row.email} className="align-top">
                             <td className="border border-amber-100 px-3 py-2 text-[11px] sm:text-xs">
                               {row.email}
                             </td>
-                            <td className="border border-amber-100 px-3 py-2 text-[11px] sm:text-xs">
-                              <span
-                                className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${statusColor}`}
-                              >
-                                {row.status === 'active' ? 'Active' : 'Removed'}
-                              </span>
+                            <td className="border border-amber-100 px-3 py-2 text-[11px] sm:text-xs whitespace-nowrap">
+                              {displayName}
                             </td>
-                            <td className="border border-amber-100 px-3 py-2 text-[11px] sm:text-xs">
+                            <td className="border border-amber-100 px-3 py-2 text-[11px] sm:text-xs whitespace-nowrap">
                               {row.joinedAt ? new Date(row.joinedAt).toLocaleString('en-PH') : ''}
                             </td>
-                            <td className="border border-amber-100 px-3 py-2 text-[11px] sm:text-xs">
+                            <td className="border border-amber-100 px-3 py-2 text-[11px] sm:text-xs whitespace-nowrap">
                               {row.updatedAt ? new Date(row.updatedAt).toLocaleString('en-PH') : ''}
                             </td>
                             <td className="border border-amber-100 px-3 py-2 text-[11px] sm:text-xs">
@@ -1265,7 +1262,6 @@ export default function AdminProjectsPage() {
           </div>
         </div>
       )}
-
     </div>
   );
 }

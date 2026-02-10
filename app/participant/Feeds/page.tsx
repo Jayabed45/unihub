@@ -329,6 +329,14 @@ export default function ParticipantFeedsPage() {
   >(null);
   const reminderTimeoutsRef = useRef<number[]>([]);
   const [nowMs, setNowMs] = useState(() => Date.now());
+
+  const [endedActivityInfo, setEndedActivityInfo] = useState<
+    | {
+        projectName: string;
+        activityTitle: string;
+      }
+    | null
+  >(null);
   
 
   const fetchProjects = async () => {
@@ -711,50 +719,71 @@ export default function ParticipantFeedsPage() {
 
   const { upcomingProjects, ongoingProjects, completedProjects } = useMemo(() => {
     const now = nowMs;
-    const byProjectJoined = Object.values(joinedActivitiesMeta).reduce<
-      Record<string, Array<(typeof joinedActivitiesMeta)[string]>>
-    >((acc, meta) => {
-      (acc[meta.projectId] ||= []).push(meta);
-      return acc;
-    }, {});
 
     const upcoming: ParticipantProject[] = [];
     const ongoing: ParticipantProject[] = [];
     const completed: ParticipantProject[] = [];
 
     approvedProjects.forEach((project) => {
-      const metas = byProjectJoined[project._id] || [];
-      if (metas.length === 0) {
-        // Not joined — considered upcoming/joinable
+      const rawSchedule: Array<{ startAt?: string; endAt?: string }> = Array.isArray(
+        (project as any).activitySchedule,
+      )
+        ? ((project as any).activitySchedule as any[])
+        : [];
+
+      if (rawSchedule.length === 0) {
         upcoming.push(project);
         return;
       }
 
       let anyOngoing = false;
-      let allEnded = metas.length > 0;
+      let anyEnded = false;
+      let anyUpcoming = false;
+      let allEnded = rawSchedule.length > 0;
 
-      metas.forEach((m) => {
-        const start = m.startAt ? new Date(m.startAt).getTime() : NaN;
-        const end = m.endAt ? new Date(m.endAt).getTime() : NaN;
-        const hasStart = Number.isFinite(start);
-        const hasEnd = Number.isFinite(end);
-        const isOngoing = hasStart && hasEnd && start <= now && now <= end;
-        const isEnded = hasEnd && end < now;
-        if (isOngoing) anyOngoing = true;
-        if (!isEnded) allEnded = false;
+      rawSchedule.forEach((item) => {
+        const startMs = item.startAt ? new Date(item.startAt).getTime() : NaN;
+        const endMs = item.endAt ? new Date(item.endAt).getTime() : NaN;
+        const hasStart = Number.isFinite(startMs);
+        const hasEnd = Number.isFinite(endMs);
+        const isOngoing = hasStart && hasEnd && startMs <= now && now <= endMs;
+        const isEnded = hasEnd && endMs < now;
+        const isUpcoming = hasStart && startMs > now;
+
+        if (isOngoing) {
+          anyOngoing = true;
+        }
+        if (isEnded) {
+          anyEnded = true;
+        }
+        if (isUpcoming) {
+          anyUpcoming = true;
+        }
+        if (!isEnded) {
+          allEnded = false;
+        }
       });
 
       if (anyOngoing) {
         ongoing.push(project);
       } else if (allEnded) {
         completed.push(project);
+      } else if (anyEnded && anyUpcoming) {
+        // Project has started before and still has future activities; keep it in Ongoing, not Upcoming.
+        ongoing.push(project);
       } else {
         upcoming.push(project);
       }
     });
 
     return { upcomingProjects: upcoming, ongoingProjects: ongoing, completedProjects: completed };
-  }, [approvedProjects, joinedActivitiesMeta, nowMs]);
+  }, [approvedProjects, nowMs]);
+
+  const completedProjectIdSet = useMemo(() => {
+    const set = new Set<string>();
+    completedProjects.forEach((p) => set.add(p._id));
+    return set;
+  }, [completedProjects]);
 
   const joinedProjectIdSet = useMemo(() => {
     const set = new Set<string>();
@@ -1095,6 +1124,37 @@ export default function ParticipantFeedsPage() {
           </div>
         </div>
       )}
+      {endedActivityInfo && (
+        <div
+          className="fixed inset-0 z-70 flex h-screen items-center justify-center bg-black/50 px-4"
+          role="dialog"
+          aria-modal="true"
+        >
+          <div className="w-full max-w-md rounded-2xl border border-yellow-100 bg-white p-6 text-sm text-gray-800 shadow-2xl">
+            <div className="mb-3 flex items-start justify-between gap-3">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wide text-yellow-500">Activity ended</p>
+                <h3 className="mt-1 text-base font-semibold text-gray-900 line-clamp-2">
+                  {endedActivityInfo.activityTitle}
+                </h3>
+                <p className="mt-0.5 text-[11px] text-gray-600 line-clamp-1">
+                  Project: {endedActivityInfo.projectName}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setEndedActivityInfo(null)}
+                className="rounded-full border border-yellow-200 px-3 py-1 text-xs font-semibold text-yellow-700 hover:bg-yellow-50"
+              >
+                Close
+              </button>
+            </div>
+            <p className="text-xs text-gray-700">
+              This activity has already ended and can no longer be joined.
+            </p>
+          </div>
+        </div>
+      )}
       {activitiesModalOpen && activitiesModalProject && (
         <div
           className="fixed inset-0 z-50 flex h-screen items-stretch bg-black/40 backdrop-blur-sm"
@@ -1116,7 +1176,8 @@ export default function ParticipantFeedsPage() {
                 </h3>
               </div>
               <div className="flex items-center gap-2">
-                {joinedStatusByProject[activitiesModalProject._id] !== 'joined' && (
+                {joinedStatusByProject[activitiesModalProject._id] !== 'joined' &&
+                  !completedProjectIdSet.has(activitiesModalProject._id) && (
                   <button
                     type="button"
                     disabled={
@@ -1158,33 +1219,50 @@ export default function ParticipantFeedsPage() {
                 </p>
               ) : (
                 <ul className="space-y-2 text-sm text-gray-800">
-                  {activitiesForModal.map((activity, index) => {
-                  const joinedKey =
-                    activitiesModalProject && activity.activityId !== null && activity.activityId !== undefined
-                      ? `${activitiesModalProject._id}:${activity.activityId}`
-                      : undefined;
-                  const isJoined = !!(joinedKey && activityJoinStatusByKey[joinedKey] === 'joined');
-                  const attendanceStatus = joinedKey ? activityAttendanceByKey[joinedKey] : undefined;
+                  {(() => {
+                    const isCompletedModalProject = completedProjectIdSet.has(activitiesModalProject._id);
 
-                  const hasStart = !!activity.startAt;
-                  const hasEnd = !!activity.endAt;
+                    const activitiesToRender = isCompletedModalProject
+                      ? activitiesForModal.filter((activity) => {
+                          const key = `${activitiesModalProject._id}:${activity.activityId}`;
+                          return activityJoinStatusByKey[key] === 'joined';
+                        })
+                      : activitiesForModal;
 
-                  const now = nowMs;
-                  const startDate = activity.startAt ? new Date(activity.startAt) : undefined;
-                  const endDate = activity.endAt ? new Date(activity.endAt) : undefined;
+                    return activitiesToRender.map((activity, index) => {
+                      const joinedKey =
+                        activitiesModalProject && activity.activityId !== null && activity.activityId !== undefined
+                          ? `${activitiesModalProject._id}:${activity.activityId}`
+                          : undefined;
+                      const isJoined = !!(joinedKey && activityJoinStatusByKey[joinedKey] === 'joined');
+                      const attendanceStatus = joinedKey ? activityAttendanceByKey[joinedKey] : undefined;
 
-                  const hasValidStart = !!startDate && !Number.isNaN(startDate.getTime());
-                  const hasValidEnd = !!endDate && !Number.isNaN(endDate.getTime());
+                      const hasStart = !!activity.startAt;
+                      const hasEnd = !!activity.endAt;
 
-                  const isExpired = hasValidEnd && endDate!.getTime() < now;
-                  const isOngoing =
-                    hasValidStart && hasValidEnd && startDate!.getTime() <= now && now <= endDate!.getTime();
-                  const isUpcoming = hasValidStart && !isOngoing && !isExpired && startDate!.getTime() > now;
+                      const now = nowMs;
+                      const startDate = activity.startAt ? new Date(activity.startAt) : undefined;
+                      const endDate = activity.endAt ? new Date(activity.endAt) : undefined;
 
-                    return (
+                      const hasValidStart = !!startDate && !Number.isNaN(startDate.getTime());
+                      const hasValidEnd = !!endDate && !Number.isNaN(endDate.getTime());
+
+                      const isExpired = hasValidEnd && endDate!.getTime() < now;
+                      const isOngoing =
+                        hasValidStart && hasValidEnd && startDate!.getTime() <= now && now <= endDate!.getTime();
+                      const isUpcoming = hasValidStart && !isOngoing && !isExpired && startDate!.getTime() > now;
+
+                      return (
                       <li
                         key={`${activity.title}-${index}`}
                         onClick={() => {
+                          if (isExpired) {
+                            setEndedActivityInfo({
+                              projectName: activitiesModalProject.name,
+                              activityTitle: activity.title,
+                            });
+                            return;
+                          }
                           setActivityDetailActivity(activity);
                           setActivityDetailIndex(index);
                           setActivityJoinError(null);
@@ -1267,8 +1345,9 @@ export default function ParticipantFeedsPage() {
                         )}
                       </div>
                     </li>
-                  );
-                })}
+                    );
+                  });
+                  })()}
                 </ul>
               )}
             </div>
