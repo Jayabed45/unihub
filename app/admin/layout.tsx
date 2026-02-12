@@ -289,6 +289,7 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
           .filter((item) =>
             !(
               item.title === 'Project approved' ||
+              item.title === 'Project rejected' ||
               item.title === 'Activity join' ||
               item.title === 'Join request approved' ||
               item.title === 'Activity attendance updated' ||
@@ -330,6 +331,7 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
     socket.on('notification:new', (payload: NotificationItem) => {
       if (
         payload.title === 'Project approved' ||
+        payload.title === 'Project rejected' ||
         payload.title === 'Activity join' ||
         payload.title === 'Join request approved' ||
         payload.title === 'Activity attendance updated' ||

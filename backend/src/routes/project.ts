@@ -22,6 +22,7 @@ import {
   listProjectEvaluationSummaries,
   updateExtensionActivities,
   emailBlastToBeneficiaries,
+  updateProject,
 } from '../controllers/projectController';
 
 const router = Router();
@@ -30,6 +31,7 @@ router.get('/', listProjects);
 router.get('/summary', listProjectSummaries);
 router.get('/summary-xlsx', exportProjectSummaryWorkbook);
 router.post('/', createProject);
+router.patch('/:id', updateProject);
 router.get('/participant-activities', listParticipantActivities);
 router.get('/:id', getProject);
 router.get('/:id/evaluations-summary', listProjectEvaluationSummaries);

@@ -391,16 +391,19 @@ export default function ProjectLeaderLayout({ children }: { children: ReactNode 
             }
           }
         } catch {
-          // best-effort only; fall back to unfiltered notifications
+          // best-effort only; if we cannot determine the leader, do not load notifications
+        }
+
+        // If we cannot identify the project leader, avoid loading global notifications at all
+        if (!leaderId && !leaderEmail) {
+          return;
         }
 
         const params = new URLSearchParams();
         if (leaderId) params.append('leaderId', leaderId);
         if (leaderEmail) params.append('leaderEmail', leaderEmail);
 
-        const url = params.toString()
-          ? `http://localhost:5000/api/notifications?${params.toString()}`
-          : 'http://localhost:5000/api/notifications';
+        const url = `http://localhost:5000/api/notifications?${params.toString()}`;
 
         const res = await fetch(url);
         if (!res.ok) {
@@ -431,16 +434,25 @@ export default function ProjectLeaderLayout({ children }: { children: ReactNode 
             projectId: item.project,
           }))
           .filter(
-            (item) =>
-              item.title !== 'New project created' &&
-              item.title !== 'Join request approved' &&
-              item.title !== 'Join request declined' &&
-              item.title !== 'Activity attendance updated' &&
-              item.title !== 'Activity Starting Soon' &&
-              item.title !== 'Activity Started' &&
-              item.title !== 'Activity Ending Soon' &&
-              item.title !== 'Activity Ended' &&
-              item.title !== 'Activity Evaluation',
+            (item) => {
+              const titleLower = (item.title || '').toLowerCase();
+              const isProjectProposal = titleLower.includes('project proposal');
+
+              return (
+                !isProjectProposal &&
+                item.title !== 'New project created' &&
+                item.title !== 'Project proposal submitted' &&
+                item.title !== 'Project proposal updated' &&
+                item.title !== 'Join request approved' &&
+                item.title !== 'Join request declined' &&
+                item.title !== 'Activity attendance updated' &&
+                item.title !== 'Activity Starting Soon' &&
+                item.title !== 'Activity Started' &&
+                item.title !== 'Activity Ending Soon' &&
+                item.title !== 'Activity Ended' &&
+                item.title !== 'Activity Evaluation'
+              );
+            },
           );
 
         setNotifications(mapped);
@@ -471,8 +483,14 @@ export default function ProjectLeaderLayout({ children }: { children: ReactNode 
 
     socket.on('notification:new', (payload: NotificationItem) => {
       // Respect the existing filter: do not show certain system-wide or participant-only notifications on leader side
+      const titleLower = (payload.title || '').toLowerCase();
+      const isProjectProposal = titleLower.includes('project proposal');
+
       if (
+        isProjectProposal ||
         payload.title === 'New project created' ||
+        payload.title === 'Project proposal submitted' ||
+        payload.title === 'Project proposal updated' ||
         payload.title === 'Join request approved' ||
         payload.title === 'Join request declined' ||
         payload.title === 'Activity attendance updated' ||
@@ -599,7 +617,11 @@ export default function ProjectLeaderLayout({ children }: { children: ReactNode 
         });
 
       if (item.title === 'Join request') {
-        router.push('/project-leader/participants');
+        if (item.projectId) {
+          router.push(`/project-leader/projects?highlightProjectId=${item.projectId}&openPanel=true&section=applicants-section`);
+        } else {
+          router.push('/project-leader/participants');
+        }
       } else if (item.title === 'Activity evaluation submitted') {
         router.push('/project-leader/dashboard');
       } else if (item.title === 'Activity join' && item.projectId) {

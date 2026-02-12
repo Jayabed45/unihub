@@ -46,6 +46,8 @@ export default function ProjectLeaderParticipantsPage() {
   const [approvedLoading, setApprovedLoading] = useState(false);
   const [approvedError, setApprovedError] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<'all' | 'pending' | 'approved'>('all');
+  const [projectFilter, setProjectFilter] = useState<'all' | string>('all');
+  const [activityFilter, setActivityFilter] = useState<'all' | string>('all');
   const [activitiesModalOpen, setActivitiesModalOpen] = useState(false);
   const [activitiesModalRow, setActivitiesModalRow] = useState<ApprovedParticipantRow | null>(null);
   const [activityActionError, setActivityActionError] = useState<string | null>(null);
@@ -94,7 +96,6 @@ export default function ProjectLeaderParticipantsPage() {
   const [evalDetailError, setEvalDetailError] = useState<string | null>(null);
   const [emailBlastOpen, setEmailBlastOpen] = useState(false);
   const [emailBlastProjectId, setEmailBlastProjectId] = useState<string>('');
-  const [emailBlastTemplate, setEmailBlastTemplate] = useState<string>('');
   const [emailBlastSubject, setEmailBlastSubject] = useState('');
   const [emailBlastMessage, setEmailBlastMessage] = useState('');
   const [emailBlastSending, setEmailBlastSending] = useState(false);
@@ -331,29 +332,31 @@ export default function ProjectLeaderParticipantsPage() {
         throw new Error(data.message || 'Failed to load projects for participants');
       }
 
-      const projects = (await resProjects.json()) as Array<{ _id: string; name?: string }>;
-      if (!projects.length) {
+      const projects = (await resProjects.json()) as Array<{ _id: string; name?: string; status?: string }>;
+      const validProjects = projects.filter((p) => p.status !== 'Rejected');
+
+      if (!validProjects.length) {
         setApprovedRows([]);
         setLeaderProjects([]);
         return;
       }
 
-      const projectIdSet = new Set(projects.map((p) => p._id));
+      const projectIdSet = new Set(validProjects.map((p) => p._id));
       const projectNameById: Record<string, string> = {};
-      projects.forEach((p) => {
+      validProjects.forEach((p) => {
         projectNameById[p._id] = p.name || 'Untitled project';
       });
 
-      setLeaderProjects(projects);
+      setLeaderProjects(validProjects);
       if (!selectedEvalProjectId) {
-        setSelectedEvalProjectId(projects[0]._id);
+        setSelectedEvalProjectId(validProjects[0]._id);
       }
 
       const beneficiariesByProject: Record<string, Array<{ email: string; fullName?: string }>> = {};
       const uniqueEmails = new Set<string>();
 
       await Promise.all(
-        projects.map(async (project) => {
+        validProjects.map(async (project) => {
           try {
             const res = await fetch(`http://localhost:5000/api/projects/${project._id}/beneficiaries`);
             if (!res.ok) return;
@@ -602,19 +605,42 @@ export default function ProjectLeaderParticipantsPage() {
     })),
   ];
 
+  const [profileModalOpen, setProfileModalOpen] = useState(false);
+  const [selectedParticipant, setSelectedParticipant] = useState<CombinedRow | null>(null);
+  const [exportPreviewOpen, setExportPreviewOpen] = useState(false);
+
   const filteredRows = combinedRows.filter((row) => {
-    if (statusFilter === 'all') return true;
-    if (statusFilter === 'pending') return row.kind === 'pending';
-    return row.kind === 'approved';
+    if (statusFilter === 'pending' && row.kind !== 'pending') return false;
+    if (statusFilter === 'approved' && row.kind !== 'approved') return false;
+
+    if (projectFilter !== 'all' && row.projectId && row.projectId !== projectFilter) return false;
+    if (activityFilter !== 'all') {
+      const hasActivityMatch = row.activities.some((activity) => activity.activityTitle === activityFilter);
+      if (!hasActivityMatch) return false;
+    }
+
+    return true;
   });
 
-  const handleExportApprovedCsv = () => {
-    if (!approvedRows.length) return;
+  const getFilteredApprovedExportRows = (): ApprovedParticipantRow[] => {
+    return approvedRows.filter((row) => {
+      if (projectFilter !== 'all' && row.projectId !== projectFilter) return false;
+      if (activityFilter !== 'all') {
+        const hasActivityMatch = row.activities.some((activity) => activity.activityTitle === activityFilter);
+        if (!hasActivityMatch) return false;
+      }
+      return true;
+    });
+  };
+
+  const doExportApprovedCsv = () => {
+    const exportRows = getFilteredApprovedExportRows();
+    if (!exportRows.length) return;
 
     const header = ['Name', 'Email', 'Project', 'Activity', 'Status', 'Last updated'];
     const lines: string[][] = [];
 
-    approvedRows.forEach((row) => {
+    exportRows.forEach((row) => {
       const name = row.fullName || row.email;
       if (!row.activities.length) {
         lines.push([name, row.email, row.projectName, '', 'No activities', '']);
@@ -671,6 +697,11 @@ export default function ProjectLeaderParticipantsPage() {
     } catch {
       // if export fails, nothing critical; table view still works
     }
+  };
+
+  const handleExportApprovedCsv = () => {
+    if (!approvedRows.length) return;
+    setExportPreviewOpen(true);
   };
 
   const fetchEvaluationDetails = async (projectId: string, activityId: number, activityTitle: string) => {
@@ -892,12 +923,12 @@ export default function ProjectLeaderParticipantsPage() {
         </div>
       </header>
 
-      <section className="rounded-2xl border border-yellow-100 bg-white/80 p-6">
-        <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+      <section className="space-y-6 rounded-2xl border border-yellow-100 bg-white/80 p-6">
+        <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
           <h2 className="text-sm font-semibold text-gray-900">Participants (pending & approved)</h2>
-          <div className="flex flex-col gap-2 text-[11px] sm:flex-row sm:items-center sm:gap-3">
-            <div className="flex items-center gap-2">
-              <span className="font-medium text-gray-700">Filter by status:</span>
+          <div className="flex flex-col gap-2 text-[11px] lg:flex-row lg:items-center lg:gap-4">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="font-medium text-gray-700">Status:</span>
               <div className="inline-flex overflow-hidden rounded-full border border-yellow-200 bg-yellow-50 text-[11px] font-medium text-gray-700">
                 <button
                   type="button"
@@ -928,13 +959,52 @@ export default function ProjectLeaderParticipantsPage() {
                 </button>
               </div>
             </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="font-medium text-gray-700">Project:</span>
+              <select
+                value={projectFilter}
+                onChange={(event) => setProjectFilter(event.target.value as 'all' | string)}
+                className="rounded-full border border-yellow-200 bg-white px-3 py-1 text-[11px] text-gray-800 focus:border-yellow-400 focus:outline-none focus:ring-1 focus:ring-yellow-300"
+              >
+                <option value="all">All projects</option>
+                {leaderProjects.map((project) => (
+                  <option key={project._id} value={project._id}>
+                    {project.name || 'Untitled project'}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="font-medium text-gray-700">Activity:</span>
+              <select
+                value={activityFilter}
+                onChange={(event) => setActivityFilter(event.target.value as 'all' | string)}
+                className="rounded-full border border-yellow-200 bg-white px-3 py-1 text-[11px] text-gray-800 focus:border-yellow-400 focus:outline-none focus:ring-1 focus:ring-yellow-300"
+              >
+                <option value="all">All activities</option>
+                {Array.from(
+                  new Set(
+                    approvedRows.flatMap((row) => row.activities.map((activity) => activity.activityTitle || '')),
+                  ),
+                )
+                  .filter((title) => !!title)
+                  .map((title) => (
+                    <option key={title} value={title}>
+                      {title}
+                    </option>
+                  ))}
+              </select>
+            </div>
+
             <button
               type="button"
               onClick={handleExportApprovedCsv}
-              disabled={!approvedRows.length}
+              disabled={!getFilteredApprovedExportRows().length}
               className="inline-flex items-center justify-center rounded-full border border-yellow-200 px-3 py-1 text-[11px] font-semibold text-yellow-700 hover:bg-yellow-50 disabled:cursor-not-allowed disabled:opacity-60"
             >
-              Export approved as CSV
+              Export filtered as CSV
             </button>
           </div>
         </div>
@@ -1057,7 +1127,18 @@ export default function ProjectLeaderParticipantsPage() {
 
                   return (
                     <tr key={row.key} className="border-t border-yellow-100">
-                      <td className="px-3 py-2 text-xs font-medium text-gray-900">{row.email}</td>
+                      <td className="px-3 py-2 text-xs font-medium text-gray-900">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSelectedParticipant(row);
+                            setProfileModalOpen(true);
+                          }}
+                          className="max-w-xs truncate text-left font-semibold text-yellow-800 hover:underline"
+                        >
+                          {row.fullName || row.email}
+                        </button>
+                      </td>
                       <td className="px-3 py-2 text-xs text-gray-700">{row.projectName}</td>
                       <td className="px-3 py-2 text-xs text-gray-700">
                         <span
@@ -1278,110 +1359,147 @@ export default function ProjectLeaderParticipantsPage() {
         )}
       </section>
 
-      {activitiesModalOpen && activitiesModalRow && (
+      {profileModalOpen && selectedParticipant && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4" role="dialog" aria-modal="true">
-          <div className="w-full max-w-lg rounded-2xl border border-yellow-100 bg-white p-6 text-sm text-gray-800 shadow-xl">
+          <div className="w-full max-w-md rounded-3xl border border-yellow-100 bg-white p-7 text-sm text-gray-800 shadow-2xl">
             <div className="mb-4 flex items-start justify-between gap-3">
-              <div>
-                <p className="text-xs font-semibold uppercase tracking-wide text-yellow-500">Activities joined</p>
-                <h3 className="mt-1 text-base font-semibold text-gray-900 line-clamp-2">
-                  {activitiesModalRow.projectName}
-                </h3>
-                <p className="mt-1 text-[11px] text-gray-500">Participant: {activitiesModalRow.email}</p>
+              <div className="flex items-center gap-3">
+                <div className="flex h-10 w-10 items-center justify-center rounded-full bg-yellow-100 text-xs font-semibold uppercase text-yellow-800">
+                  {(selectedParticipant.fullName || selectedParticipant.email)
+                    .split(' ')
+                    .map((part) => part.trim()[0])
+                    .filter(Boolean)
+                    .slice(0, 2)
+                    .join('')}
+                </div>
+                <div>
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-yellow-500">Participant profile</p>
+                  <h3 className="mt-1 text-base font-semibold text-gray-900 break-words">
+                    {selectedParticipant.fullName || selectedParticipant.email}
+                  </h3>
+                  <p className="mt-0.5 text-[11px] text-gray-500 break-all">{selectedParticipant.email}</p>
+                  <p className="mt-0.5 text-[11px] text-gray-600">{selectedParticipant.projectName}</p>
+                </div>
               </div>
               <button
                 type="button"
-                onClick={() => {
-                  setActivitiesModalOpen(false);
-                  setActivitiesModalRow(null);
-                  setActivityActionError(null);
-                  setActivityDeleteLoadingKey(null);
-                }}
-                className="rounded-full border border-yellow-200 px-3 py-1 text-xs font-semibold text-yellow-700 hover:bg-yellow-50"
+                onClick={() => setProfileModalOpen(false)}
+                className="rounded-full border border-yellow-200 px-3 py-0.5 text-[11px] font-semibold text-yellow-700 hover:bg-yellow-50"
               >
                 Close
               </button>
             </div>
 
-            {activityActionError && (
-              <p className="mb-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
-                {activityActionError}
-              </p>
-            )}
+            <div className="space-y-4 rounded-2xl bg-yellow-50/60 p-4 text-[11px] text-gray-700">
+              <div className="flex items-center justify-between">
+                <div className="space-y-0.5">
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-500">Status</p>
+                  <p className="text-[11px] text-gray-800">Current participation status</p>
+                </div>
+                <span
+                  className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
+                    selectedParticipant.kind === 'approved'
+                      ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                      : 'border-amber-200 bg-amber-50 text-amber-700'
+                  }`}
+                >
+                  {selectedParticipant.kind === 'approved' ? 'Approved' : 'Pending approval'}
+                </span>
+              </div>
 
-            {activitiesModalRow.activities.length === 0 ? (
-              <p className="text-sm text-gray-600">This participant has no joined activities for this project.</p>
-            ) : (
-              <ul className="space-y-2 text-sm text-gray-800">
-                {[...activitiesModalRow.activities]
-                  .sort((a, b) => {
-                    if (!highlightActivity) return 0;
+              <div className="border-t border-yellow-100 pt-3">
+                <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-500">Activities joined</p>
+                {selectedParticipant.activities.length === 0 ? (
+                  <p className="mt-0.5 text-[11px] text-gray-600">
+                    {selectedParticipant.kind === 'pending'
+                      ? 'No activities yet – pending approval.'
+                      : 'No joined activities yet for this project.'}
+                  </p>
+                ) : (
+                  <>
+                    <p className="mt-0.5 text-[11px] font-medium text-gray-800">
+                      {selectedParticipant.activities[0]?.activityTitle}
+                    </p>
+                    <p className="text-[11px] text-gray-600">
+                      {selectedParticipant.activities.length > 1
+                        ? `+${selectedParticipant.activities.length - 1} more activity` +
+                          (selectedParticipant.activities.length - 1 > 1 ? 'ies' : '')
+                        : '1 activity total'}
+                    </p>
+                  </>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
-                    const isAHighlighted =
-                      activitiesModalRow.projectId === highlightActivity.projectId &&
-                      activitiesModalRow.email === highlightActivity.participantEmail &&
-                      a.activityTitle === highlightActivity.activityTitle;
-                    const isBHighlighted =
-                      activitiesModalRow.projectId === highlightActivity.projectId &&
-                      activitiesModalRow.email === highlightActivity.participantEmail &&
-                      b.activityTitle === highlightActivity.activityTitle;
+      {exportPreviewOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4" role="dialog" aria-modal="true">
+          <div className="w-full max-w-2xl rounded-2xl border border-yellow-100 bg-white p-6 text-sm text-gray-800 shadow-2xl">
+            <div className="mb-4 flex items-start justify-between gap-3">
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-yellow-500">Export preview</p>
+                <h3 className="mt-1 text-base font-semibold text-gray-900">Approved participants</h3>
+                <p className="mt-1 text-[11px] text-gray-600">
+                  Review the rows that will be included before downloading the CSV file.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setExportPreviewOpen(false)}
+                className="rounded-full border border-yellow-200 px-3 py-1 text-[11px] font-semibold text-yellow-700 hover:bg-yellow-50"
+              >
+                Close
+              </button>
+            </div>
 
-                    if (isAHighlighted === isBHighlighted) return 0;
-                    return isAHighlighted ? -1 : 1;
-                  })
-                  .map((activity) => {
-                  const actStatusLabel =
-                    activity.status === 'present'
-                      ? 'Present'
-                      : activity.status === 'absent'
-                      ? 'Absent'
-                      : 'Registered';
-                  const actStatusColor =
-                    activity.status === 'present'
-                      ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                      : activity.status === 'absent'
-                      ? 'bg-red-50 text-red-700 border-red-200'
-                      : 'bg-amber-50 text-amber-700 border-amber-200';
+            <div className="max-h-80 overflow-y-auto rounded-xl border border-yellow-100 bg-yellow-50/40">
+              <table className="min-w-full text-left text-[11px] text-gray-800">
+                <thead className="bg-yellow-50 text-[10px] font-semibold uppercase tracking-wide text-gray-600">
+                  <tr>
+                    <th className="px-3 py-2">Name</th>
+                    <th className="px-3 py-2">Email</th>
+                    <th className="px-3 py-2">Project</th>
+                    <th className="px-3 py-2">Activities joined</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {approvedRows.map((row) => (
+                    <tr key={row.key} className="border-t border-yellow-100 bg-white/80">
+                      <td className="px-3 py-2 align-top text-[11px] text-gray-900">{row.fullName || row.email}</td>
+                      <td className="px-3 py-2 align-top text-[11px] text-gray-800">{row.email}</td>
+                      <td className="px-3 py-2 align-top text-[11px] text-gray-800">{row.projectName}</td>
+                      <td className="px-3 py-2 align-top text-[11px] text-gray-700">
+                        {row.activities.length === 0
+                          ? 'No activities'
+                          : `${row.activities.length} activit${row.activities.length === 1 ? 'y' : 'ies'}`}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
 
-                  const loadingKey = `${activitiesModalRow.key}:${activity.activityId}`;
-                  const isDeleting = activityDeleteLoadingKey === loadingKey;
-
-                  const isHighlighted =
-                    !!highlightActivity &&
-                    activitiesModalRow.projectId === highlightActivity.projectId &&
-                    activitiesModalRow.email === highlightActivity.participantEmail &&
-                    activity.activityTitle === highlightActivity.activityTitle;
-
-                  return (
-                    <li
-                      key={`${activitiesModalRow.key}:${activity.activityId}`}
-                      className={`flex items-center justify-between gap-3 rounded-xl border border-yellow-100 bg-yellow-50/60 px-3 py-2 ${
-                        isHighlighted ? 'ring-2 ring-yellow-400 animate-pulse' : ''
-                      }`}
-                    >
-                      <div>
-                        <p className="text-sm font-semibold text-gray-900 line-clamp-2">{activity.activityTitle}</p>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <span
-                          className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${actStatusColor}`}
-                        >
-                          {actStatusLabel}
-                        </span>
-                        <button
-                          type="button"
-                          disabled={isDeleting}
-                          onClick={() => handleDeleteActivity(activitiesModalRow, activity)}
-                          className="rounded-full border border-red-200 px-3 py-1 text-[11px] font-semibold text-red-600 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-60"
-                        >
-                          {isDeleting ? 'Removing...' : 'Delete'}
-                        </button>
-                      </div>
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
+            <div className="mt-4 flex justify-end gap-2 text-[11px]">
+              <button
+                type="button"
+                onClick={() => setExportPreviewOpen(false)}
+                className="rounded-full border border-gray-200 px-3 py-1 font-semibold text-gray-700 hover:bg-gray-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  doExportApprovedCsv();
+                  setExportPreviewOpen(false);
+                }}
+                className="rounded-full bg-yellow-500 px-3 py-1 font-semibold text-white shadow hover:bg-yellow-600"
+              >
+                Download CSV
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -1504,33 +1622,6 @@ export default function ProjectLeaderParticipantsPage() {
             </div>
 
             <div className="space-y-3 text-sm">
-              <div className="space-y-1">
-                <label className="text-xs font-semibold uppercase tracking-wide text-gray-700" htmlFor="email-blast-template">
-                  Announcement type (optional)
-                </label>
-                <select
-                  id="email-blast-template"
-                  className="w-full rounded-lg border border-yellow-200 bg-white px-3 py-2 text-sm text-gray-900 focus:border-yellow-400 focus:outline-none focus:ring-2 focus:ring-yellow-200"
-                  value={emailBlastTemplate}
-                  onChange={(event) => {
-                    const value = event.target.value;
-                    setEmailBlastTemplate(value);
-                    if (value === 'reminder') {
-                      setEmailBlastSubject("Reminder for upcoming activity");
-                    } else if (value === 'schedule-update') {
-                      setEmailBlastSubject("Schedule update for project activities");
-                    } else if (value === 'general') {
-                      setEmailBlastSubject("Announcement for project participants");
-                    }
-                  }}
-                >
-                  <option value="">Custom subject</option>
-                  <option value="reminder">Reminder</option>
-                  <option value="schedule-update">Schedule update</option>
-                  <option value="general">General announcement</option>
-                </select>
-              </div>
-
               <div className="space-y-1">
                 <label className="text-xs font-semibold uppercase tracking-wide text-gray-700">
                   Project

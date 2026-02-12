@@ -24,6 +24,7 @@ export interface IProject extends Document {
   status: 'Pending' | 'Approved' | 'Rejected';
   activitySchedule?: IProjectActivitySchedule[];
   extensionActivities?: IProjectExtensionActivity[];
+  isSubmitted: boolean;
 }
 
 const ProjectSchema: Schema = new Schema({
@@ -53,6 +54,11 @@ const ProjectSchema: Schema = new Schema({
     type: String,
     enum: ['Pending', 'Approved', 'Rejected'],
     default: 'Pending',
+    required: true,
+  },
+  isSubmitted: {
+    type: Boolean,
+    default: false,
     required: true,
   },
 }, { timestamps: true });

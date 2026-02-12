@@ -393,7 +393,8 @@ export default function AdminProjectsPage() {
 
   const approvedProjects = projects.filter((project) => project.status === 'Approved');
 
-  const endedProjects = projects.filter((project) => project.status === 'Rejected');
+  // Exclude rejected projects from display as requested
+  const endedProjects = projects.filter((project) => project.status !== 'Pending' && project.status !== 'Approved' && project.status !== 'Rejected');
 
   return (
     <div className="space-y-6">

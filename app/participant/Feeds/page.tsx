@@ -194,7 +194,7 @@ export default function ParticipantFeedsPage() {
           title,
           message,
           project: projectId,
-          recipientEmail: participantEmail || undefined,
+          recipientEmail: participantEmail,
         }),
       });
 
@@ -547,7 +547,20 @@ export default function ParticipantFeedsPage() {
         }
       > = {};
 
-      data.forEach((item) => {
+      for (const item of data) {
+        try {
+            const benRes = await fetch(`http://localhost:5000/api/projects/${item.projectId}/beneficiaries`);
+            if (benRes.ok) {
+                const beneficiaries = await benRes.json() as Array<{email: string, status: string}>;
+                const me = beneficiaries.find(b => b.email === participantEmail);
+                if (me && me.status === 'removed') {
+                    continue; // Skip this activity if user is removed from project
+                }
+            }
+        } catch (e) {
+            console.error("Error checking beneficiary status", e);
+        }
+
         const key = `${item.projectId}:${item.activityId}`;
         joinedMap[key] = 'joined';
         attendanceMap[key] = item.status;
@@ -560,7 +573,7 @@ export default function ParticipantFeedsPage() {
           endAt: item.endAt,
           location: item.location,
         };
-      });
+      }
 
       if (Object.keys(joinedMap).length > 0) {
         setActivityJoinStatusByKey((prev) => ({ ...prev, ...joinedMap }));
@@ -715,7 +728,10 @@ export default function ParticipantFeedsPage() {
 
   
 
-  const approvedProjects = projects.filter((project) => project.status === 'Approved');
+  const approvedProjects = projects.filter((project) => {
+    const status = (project.status || '').toString().toLowerCase();
+    return status === 'approved';
+  });
 
   const { upcomingProjects, ongoingProjects, completedProjects } = useMemo(() => {
     const now = nowMs;

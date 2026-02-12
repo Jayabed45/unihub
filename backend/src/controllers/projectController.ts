@@ -124,17 +124,21 @@ export const createProject = async (req: Request, res: Response) => {
       projectLeaderId,
       sections,
       totals,
+      isDraft,
     }: {
       name?: string;
       description?: string;
       projectLeaderId?: string;
       sections?: Record<string, any>;
       totals?: Record<string, any>;
+      isDraft?: boolean;
     } = req.body || {};
 
     if (!projectLeaderId) {
       return res.status(400).json({ message: 'projectLeaderId is required' });
     }
+
+    const draft = isDraft === true;
 
     const project = new Project({
       name: name && name.trim() ? name.trim() : 'Untitled Project',
@@ -144,9 +148,15 @@ export const createProject = async (req: Request, res: Response) => {
       proposalData: sections || {},
       summary: totals || {},
       status: 'Pending',
+      isSubmitted: !draft,
     } as any);
 
     const saved = await project.save();
+
+    // For draft saves, skip notifications/emails entirely
+    if (draft) {
+      return res.status(201).json(saved);
+    }
 
     let leaderEmail: string | undefined;
     try {
@@ -212,10 +222,164 @@ export const createProject = async (req: Request, res: Response) => {
       console.error('Failed to send new project submission emails to admins', emailError);
     }
 
+    // Admin-only in-app notification for new proposal (no project / recipientEmail)
+    try {
+      const adminOnlyNotif = await Notification.create({
+        title: 'Project proposal submitted',
+        message: `A new project "${saved.name}" has been submitted for review.`,
+      });
+
+      try {
+        const io = getIO();
+        io.emit('notification:new', {
+          id: adminOnlyNotif._id.toString(),
+          title: adminOnlyNotif.title,
+          message: adminOnlyNotif.message,
+          projectId: undefined,
+          timestamp: adminOnlyNotif.createdAt
+            ? adminOnlyNotif.createdAt.toLocaleString('en-PH', {
+                dateStyle: 'medium',
+                timeStyle: 'short',
+              })
+            : '',
+          read: adminOnlyNotif.read,
+        });
+      } catch (socketError) {
+        console.error('Failed to emit admin-only project submission notification', socketError);
+      }
+    } catch (notifyError) {
+      console.error('Failed to create admin-only project submission notification', notifyError);
+    }
+
     return res.status(201).json(saved);
   } catch (error) {
     console.error('Error creating project proposal', error);
     return res.status(500).json({ message: 'Failed to create project proposal' });
+  }
+};
+
+export const updateProject = async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    if (!id) {
+      return res.status(400).json({ message: 'Project ID is required' });
+    }
+
+    const project = await Project.findById(id);
+    if (!project) {
+      return res.status(404).json({ message: 'Project not found' });
+    }
+
+    if ((project as any).isSubmitted) {
+      return res.status(400).json({ message: 'Submitted projects cannot be edited.' });
+    }
+
+    const {
+      name,
+      description,
+      sections,
+      totals,
+      markSubmitted,
+    }: {
+      name?: string;
+      description?: string;
+      sections?: Record<string, any>;
+      totals?: Record<string, any>;
+      markSubmitted?: boolean;
+    } = req.body || {};
+
+    const update: Record<string, any> = {};
+    if (typeof name !== 'undefined') {
+      update.name = name && name.trim() ? name.trim() : 'Untitled Project';
+    }
+    if (typeof description !== 'undefined') {
+      update.description = description && description.trim() ? description.trim() : 'Extension project proposal';
+    }
+    if (typeof sections !== 'undefined') {
+      update.proposalData = sections;
+    }
+    if (typeof totals !== 'undefined') {
+      update.summary = totals;
+    }
+    if (markSubmitted === true) {
+      update.isSubmitted = true;
+    }
+
+    const updatedProject = await Project.findByIdAndUpdate(id, update, { new: true }).lean<IProject | null>();
+    if (!updatedProject) {
+      return res.status(404).json({ message: 'Project not found' });
+    }
+    try {
+      const [adminEmails, leaderEmail] = await Promise.all([
+        getAdminEmails(),
+        getProjectLeaderEmail((updatedProject as any).projectLeader),
+      ]);
+
+      if (adminEmails.length > 0) {
+        await Promise.all(
+          adminEmails.map((addr) =>
+            (async () => {
+              const subject = `Project updated: ${updatedProject.name}`;
+              const html = buildRoleEmail(
+                'Admin',
+                subject,
+                `
+                  <p class="paragraph">An existing project has been updated by <strong>${
+                    leaderEmail ?? 'a project leader'
+                  }</strong>.</p>
+                  <p class="paragraph"><strong>Project:</strong> ${updatedProject.name}</p>
+                  <a href="${process.env.FRONTEND_URL || 'http://localhost:3000'}/admin/dashboard" class="btn">Review in Admin Dashboard</a>
+                `,
+              );
+              await sendMail({
+                to: addr,
+                subject,
+                html,
+                text: `Hello Admin,\n\nThe project "${updatedProject.name}" has been updated by ${
+                  leaderEmail ?? 'a project leader'
+                }.\n\nPlease review the latest version in the UniHub admin dashboard.\n\n– UniHub System`,
+              });
+            })(),
+          ),
+        );
+      }
+    } catch (emailError) {
+      console.error('Failed to send project update emails to admins', emailError);
+    }
+
+    // Admin-only in-app notification for updated proposal (no project / recipientEmail)
+    try {
+      const adminOnlyNotif = await Notification.create({
+        title: 'Project proposal updated',
+        message: `The project "${updatedProject.name}" has been updated and resubmitted for review.`,
+      });
+
+      try {
+        const io = getIO();
+        io.emit('notification:new', {
+          id: adminOnlyNotif._id.toString(),
+          title: adminOnlyNotif.title,
+          message: adminOnlyNotif.message,
+          projectId: undefined,
+          timestamp: adminOnlyNotif.createdAt
+            ? adminOnlyNotif.createdAt.toLocaleString('en-PH', {
+                dateStyle: 'medium',
+                timeStyle: 'short',
+              })
+            : '',
+          read: adminOnlyNotif.read,
+        });
+      } catch (socketError) {
+        console.error('Failed to emit admin-only project update notification', socketError);
+      }
+    } catch (notifyError) {
+      console.error('Failed to create admin-only project update notification', notifyError);
+    }
+
+    return res.json(updatedProject);
+  } catch (error) {
+    console.error('Error updating project proposal', error);
+    return res.status(500).json({ message: 'Failed to update project proposal' });
   }
 };
 
@@ -237,6 +401,10 @@ export const updateActivitySchedule = async (req: Request, res: Response) => {
     const project = await Project.findById(id);
     if (!project) {
       return res.status(404).json({ message: 'Project not found' });
+    }
+
+    if ((project as any).isSubmitted) {
+      return res.status(400).json({ message: 'Submitted projects cannot be edited.' });
     }
 
     let parsedStart: Date | undefined;
@@ -448,6 +616,10 @@ export const listProjects = async (req: Request, res: Response) => {
     const filter: Record<string, any> = {};
     if (projectLeaderId) {
       filter.projectLeader = projectLeaderId;
+    } else {
+      // If no projectLeaderId is provided (i.e., Admin view), exclude drafts (unsubmitted projects).
+      // Drafts should only be visible to the project leader who created them.
+      filter.isSubmitted = true;
     }
 
     const projects = await Project.find(filter).sort({ _id: -1 }).lean();
@@ -554,6 +726,69 @@ export const evaluateProject = async (req: Request, res: Response) => {
         }
       } catch (notifyError) {
         console.error('Failed to create approval notification', notifyError);
+      }
+    } else if (status === 'Rejected') {
+      // Notify the project leader that the proposal was rejected and send a
+      // clearly-worded email with guidance.
+      try {
+        const rejectionNotification = await Notification.create({
+          title: 'Project rejected',
+          message: 'Admin reviewed your project and did not approve it at this time.',
+          project: project._id,
+        });
+
+        try {
+          const io = getIO();
+          io.emit('notification:new', {
+            id: rejectionNotification._id.toString(),
+            title: rejectionNotification.title,
+            message: rejectionNotification.message,
+            projectId: project._id.toString(),
+            timestamp: rejectionNotification.createdAt
+              ? rejectionNotification.createdAt.toLocaleString('en-PH', {
+                  dateStyle: 'medium',
+                  timeStyle: 'short',
+                })
+              : '',
+            read: rejectionNotification.read,
+          });
+        } catch (socketError) {
+          console.error('Failed to emit rejection notification over socket', socketError);
+        }
+
+        try {
+          const leaderEmail = await getProjectLeaderEmail(project.projectLeader);
+          if (leaderEmail) {
+            const subject = `Update on your project "${project.name}"`;
+            const html = buildRoleEmail(
+              'Project Leader',
+              subject,
+              `
+                <p class="paragraph">Thank you for submitting your extension project proposal <strong>${
+                  project.name
+                }</strong>.</p>
+                <p class="paragraph">After careful review, the UniHub administrators were not able to approve this proposal at this time.</p>
+                <p class="paragraph">Please review the evaluation remarks and recommendations in your Project Leader dashboard. You may revise the proposal and resubmit it for another round of review if advised.</p>
+                <a href="${
+                  process.env.FRONTEND_URL || 'http://localhost:3000'
+                }/project-leader/projects" class="btn">View evaluation and revise proposal</a>
+              `,
+            );
+
+            await sendMail({
+              to: leaderEmail,
+              subject,
+              html,
+              text: `Hi,\n\nThank you for submitting your project "${
+                project.name
+              }". After review, the UniHub administrators were not able to approve this proposal at this time.\n\nPlease review the evaluation remarks in your Project Leader dashboard. You may revise and resubmit the proposal if advised.\n\n– UniHub Team`,
+            });
+          }
+        } catch (emailError) {
+          console.error('Failed to send project rejection email to project leader', emailError);
+        }
+      } catch (notifyError) {
+        console.error('Failed to create rejection notification', notifyError);
       }
     }
 

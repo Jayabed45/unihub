@@ -62,12 +62,22 @@ interface LeaderEvaluation {
   };
 }
 
+interface ApplicantRow {
+  id: string;
+  email: string;
+  fullName?: string;
+  createdAtLabel: string;
+  status: 'Pending' | 'Approved';
+}
+
 interface LeaderProject {
   _id: string;
   name: string;
   description: string;
   status?: 'Pending' | 'Approved' | 'Rejected' | string;
   evaluation?: LeaderEvaluation;
+  applicants?: ApplicantRow[];
+  isSubmitted?: boolean;
 }
 
 interface ProjectActivity {
@@ -102,6 +112,10 @@ export default function ProjectLeaderProjectsPage() {
   const [projects, setProjects] = useState<LeaderProject[]>([]);
   const [projectsLoading, setProjectsLoading] = useState(false);
   const [projectsError, setProjectsError] = useState<string | null>(null);
+  const [applicants, setApplicants] = useState<ApplicantRow[]>([]);
+  const [applicantsLoading, setApplicantsLoading] = useState(false);
+  const [applicantsError, setApplicantsError] = useState<string | null>(null);
+  const [applicantRespondingId, setApplicantRespondingId] = useState<string | null>(null);
   const [viewProjectId, setViewProjectId] = useState<string | null>(null);
   const [viewProjectData, setViewProjectData] = useState<any | null>(null);
   const [optionsOpenProjectId, setOptionsOpenProjectId] = useState<string | null>(null);
@@ -112,6 +126,8 @@ export default function ProjectLeaderProjectsPage() {
   const searchParams = useSearchParams();
   const highlightProjectId = searchParams.get('highlightProjectId');
   const highlightActivityTitle = searchParams.get('highlightActivityTitle');
+  const openPanelParam = searchParams.get('openPanel');
+  const sectionParam = searchParams.get('section');
   const [currentPanelProjectStatus, setCurrentPanelProjectStatus] = useState<string | null>(null);
   const [activitiesModalOpen, setActivitiesModalOpen] = useState(false);
   const [activitiesModalProject, setActivitiesModalProject] = useState<LeaderProject | null>(null);
@@ -162,13 +178,30 @@ export default function ProjectLeaderProjectsPage() {
   >({});
   const [activityScheduleSavingKey, setActivityScheduleSavingKey] = useState<string | null>(null);
   const [activityScheduleError, setActivityScheduleError] = useState<string | null>(null);
+  const [applicantProfileOpen, setApplicantProfileOpen] = useState(false);
+  const [selectedApplicant, setSelectedApplicant] = useState<ApplicantRow | null>(null);
 
   const renderProjectCard = (project: LeaderProject) => {
     const status = project.status || 'Pending';
-    const statusLabel =
-      status === 'Approved' ? 'Approved' : status === 'Rejected' ? 'Rejected' : 'Pending approval';
+    const isSubmitted = project.isSubmitted === true;
+
+    const statusLabel = !isSubmitted
+      ? 'Draft – not submitted'
+      : status === 'Approved'
+      ? 'Approved'
+      : status === 'Rejected'
+      ? 'Rejected'
+      : 'Pending approval';
     const hasEvaluation = !!project.evaluation;
     const isHighlighted = project._id === highlightProjectId;
+
+    const statusTone = !isSubmitted
+      ? 'border-gray-200 bg-gray-50 text-gray-700'
+      : status === 'Approved'
+      ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+      : status === 'Rejected'
+      ? 'border-red-200 bg-red-50 text-red-700'
+      : 'border-yellow-200 bg-yellow-50 text-yellow-700';
 
     return (
       <div
@@ -188,9 +221,11 @@ export default function ProjectLeaderProjectsPage() {
         </div>
         <div className="mt-4 flex items-center justify-between gap-2 text-xs">
           <div className="flex flex-col gap-1">
-            <span className="inline-flex items-center rounded-full bg-yellow-50 px-2 py-0.5 font-semibold text-yellow-700">
+            {!(!isSubmitted) && (
+            <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide ${statusTone}`}>
               {statusLabel}
             </span>
+            )}
             {hasEvaluation && (
               <span className="inline-flex items-center rounded-full border border-emerald-100 bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-700">
                 Evaluated
@@ -406,9 +441,10 @@ export default function ProjectLeaderProjectsPage() {
     const completed: LeaderProject[] = [];
 
     projects.forEach((project) => {
-      const status = (project.status as string) || 'Pending';
+      const isSubmitted = project.isSubmitted === true;
 
-      if (status !== 'Approved') {
+      // Proposals (Drafts) - Only projects that are NOT submitted
+      if (!isSubmitted) {
         upcoming.push(project);
         return;
       }
@@ -420,7 +456,7 @@ export default function ProjectLeaderProjectsPage() {
         : [];
 
       if (rawSchedule.length === 0) {
-        // Approved project with no schedule yet: treat as approved (not for-approval).
+        // Submitted but no schedule (e.g. Pending, Rejected, or Approved but not scheduled)
         ongoing.push(project);
         return;
       }
@@ -1583,6 +1619,262 @@ export default function ProjectLeaderProjectsPage() {
     }
   };
 
+  const fetchApplicantsForProject = async (projectId: string) => {
+    if (!projectId) {
+      setApplicants([]);
+      return;
+    }
+
+    setApplicantsLoading(true);
+    setApplicantsError(null);
+
+    try {
+      // 1) Load notifications to find pending join requests for this project
+      const notifRes = await fetch('http://localhost:5000/api/notifications');
+      if (!notifRes.ok) {
+        const data = await notifRes.json().catch(() => ({}));
+        throw new Error((data as any).message || 'Failed to load applicants');
+      }
+
+      const notifData = (await notifRes.json()) as Array<{
+        _id: string;
+        title: string;
+        message: string;
+        project?: string;
+        createdAt?: string;
+      }>;
+
+      const joinRequests = notifData.filter(
+        (item) => item.title === 'Join request' && item.project && String(item.project) === String(projectId),
+      );
+
+      const joinResponses = notifData.filter(
+        (item) =>
+          (item.title === 'Join request approved' || item.title === 'Join request declined') &&
+          item.project &&
+          String(item.project) === String(projectId),
+      );
+
+      let pendingRows: ApplicantRow[] = joinRequests
+        .filter((joinItem) => {
+          const message = joinItem.message || '';
+          const emailFromJoin = message.endsWith(' wants to join')
+            ? message.replace(' wants to join', '').trim()
+            : message.trim();
+
+          if (!emailFromJoin) return false;
+
+          const hasResponse = joinResponses.some((resp) => {
+            if (!resp.message) return false;
+            const respEmail = resp.message.split(' - ')[0]?.trim();
+            return respEmail === emailFromJoin;
+          });
+
+          return !hasResponse;
+        })
+        .map((item) => {
+          const message = item.message || '';
+          const email = message.endsWith(' wants to join')
+            ? message.replace(' wants to join', '').trim()
+            : message.trim();
+
+          const createdAtLabel = item.createdAt
+            ? new Date(item.createdAt).toLocaleString('en-PH', {
+                dateStyle: 'medium',
+                timeStyle: 'short',
+              })
+            : '';
+
+          return {
+            id: item._id,
+            email,
+            createdAtLabel,
+            status: 'Pending',
+          };
+        });
+
+      // 2) Look up full names for pending applicants via the auth users endpoint
+      try {
+        const uniquePendingEmails = Array.from(
+          new Set(pendingRows.map((row) => (typeof row.email === 'string' ? row.email.trim().toLowerCase() : ''))),
+        ).filter((email) => !!email);
+
+        if (uniquePendingEmails.length > 0) {
+          const usersRes = await fetch('http://localhost:5000/api/auth/users');
+          if (usersRes.ok) {
+            const users = (await usersRes.json()) as Array<{ email?: string; username?: string }>;
+            const nameByEmail = new Map<string, string>();
+
+            users.forEach((user) => {
+              const rawEmail = typeof user.email === 'string' ? user.email.trim().toLowerCase() : '';
+              const username = typeof user.username === 'string' ? user.username.trim() : '';
+              if (rawEmail && username) {
+                nameByEmail.set(rawEmail, username);
+              }
+            });
+
+            pendingRows = pendingRows.map((row) => {
+              const key = typeof row.email === 'string' ? row.email.trim().toLowerCase() : '';
+              const fullName = key ? nameByEmail.get(key) : undefined;
+              return fullName
+                ? {
+                    ...row,
+                    fullName,
+                  }
+                : row;
+            });
+          }
+        }
+      } catch {
+        // If lookup fails, we still show email as the name fallback
+      }
+
+      // 3) Load approved beneficiaries for this project
+      const approvedRows: ApplicantRow[] = [];
+      try {
+        const benRes = await fetch(`http://localhost:5000/api/projects/${encodeURIComponent(projectId)}/beneficiaries`);
+        if (benRes.ok) {
+          const benData = (await benRes.json()) as Array<{
+            email?: string;
+            fullName?: string;
+            status?: string;
+            joinedAt?: string;
+          }>;
+
+          benData
+            .filter((b) => b.status && b.status !== 'removed')
+            .forEach((b, index) => {
+              const rawEmail = typeof b.email === 'string' ? b.email.trim() : '';
+              if (!rawEmail) return;
+
+              const fullName = typeof b.fullName === 'string' && b.fullName.trim() ? b.fullName.trim() : undefined;
+
+              const createdAtLabel = b.joinedAt
+                ? new Date(b.joinedAt).toLocaleString('en-PH', {
+                    dateStyle: 'medium',
+                    timeStyle: 'short',
+                  })
+                : '';
+
+              approvedRows.push({
+                id: `approved:${index}:${rawEmail}`,
+                email: rawEmail,
+                fullName,
+                createdAtLabel,
+                status: 'Approved',
+              });
+            });
+        }
+      } catch {
+        // beneficiaries are optional; ignore errors here
+      }
+
+      // 4) Merge pending + approved, dedupe by email so each appears once with best status
+      const byEmail = new Map<string, ApplicantRow>();
+      approvedRows.forEach((row) => {
+        const emailKey = row.email.toLowerCase();
+        if (!byEmail.has(emailKey)) {
+          byEmail.set(emailKey, row);
+        }
+      });
+      pendingRows.forEach((row) => {
+        const emailKey = row.email.toLowerCase();
+        if (!byEmail.has(emailKey)) {
+          byEmail.set(emailKey, row);
+        } else {
+          // If someone is already approved but also has a pending request, keep the approved entry
+          const existing = byEmail.get(emailKey)!;
+          if (existing.status === 'Pending' && row.status === 'Approved') {
+            byEmail.set(emailKey, row);
+          }
+        }
+      });
+
+      const merged = Array.from(byEmail.values());
+
+      // Sort by status (Pending first) then by createdAt label
+      merged.sort((a, b) => {
+        if (a.status !== b.status) {
+          return a.status === 'Pending' ? -1 : 1;
+        }
+        return a.createdAtLabel.localeCompare(b.createdAtLabel);
+      });
+
+      setApplicants(merged);
+    } catch (error: any) {
+      setApplicantsError(error.message || 'Failed to load applicants');
+      setApplicants([]);
+    } finally {
+      setApplicantsLoading(false);
+    }
+  };
+
+  const handleApplicantDecision = async (
+    projectId: string,
+    email: string,
+    decision: 'approved' | 'declined',
+  ) => {
+    if (!projectId || !email) return;
+
+    setApplicantRespondingId(email);
+    setApplicantsError(null);
+
+    try {
+      const res = await fetch(
+        `http://localhost:5000/api/projects/${encodeURIComponent(projectId)}/join/respond`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ email, decision }),
+        },
+      );
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error((data as any).message || 'Failed to respond to applicant');
+      }
+
+      await fetchApplicantsForProject(projectId);
+    } catch (error: any) {
+      setApplicantsError(error.message || 'Failed to respond to applicant');
+    } finally {
+      setApplicantRespondingId(null);
+    }
+  };
+
+  const handleRemoveApprovedApplicant = async (projectId: string, email: string) => {
+    if (!projectId || !email) return;
+
+    setApplicantRespondingId(email);
+    setApplicantsError(null);
+
+    try {
+      const res = await fetch(
+        `http://localhost:5000/api/projects/${encodeURIComponent(projectId)}/beneficiaries`,
+        {
+          method: 'PATCH',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ email, status: 'removed' }),
+        },
+      );
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error((data as any).message || 'Failed to remove participant from project');
+      }
+
+      await fetchApplicantsForProject(projectId);
+    } catch (error: any) {
+      setApplicantsError(error.message || 'Failed to remove participant from project');
+    } finally {
+      setApplicantRespondingId(null);
+    }
+  };
+
   const handleSaveActivitySchedule = async (
     projectId: string,
     activity: ProjectActivity,
@@ -1947,6 +2239,25 @@ export default function ProjectLeaderProjectsPage() {
   }, []);
 
   useEffect(() => {
+    if (highlightProjectId && openPanelParam === 'true' && projects.length > 0) {
+      const project = projects.find((p) => p._id === highlightProjectId);
+      if (project) {
+        // Only open if not already open to avoid resetting state if user interacts
+        if (viewProjectId !== highlightProjectId || !panelVisible) {
+          openReviewPanel(highlightProjectId);
+        }
+        
+        if (sectionParam) {
+          setActiveSectionId(sectionParam);
+          if (sectionParam === 'applicants-section') {
+            fetchApplicantsForProject(highlightProjectId);
+          }
+        }
+      }
+    }
+  }, [highlightProjectId, openPanelParam, sectionParam, projects, viewProjectId, panelVisible]);
+
+  useEffect(() => {
     const socket = io('http://localhost:5000');
     socketRef.current = socket;
 
@@ -2123,7 +2434,7 @@ export default function ProjectLeaderProjectsPage() {
     }
   };
 
-  const handleSaveProposal = async () => {
+  const handleSaveProposal = async (action: 'draft' | 'submit') => {
     if (isSaving) return;
     if (!panelRef.current) return;
 
@@ -2229,8 +2540,16 @@ export default function ProjectLeaderProjectsPage() {
       const titleInput = summarySection?.querySelector<HTMLInputElement>('input[placeholder="Enter project title"]');
       const name = titleInput?.value ?? 'Untitled Project';
 
-      const response = await fetch('http://localhost:5000/api/projects', {
-        method: 'POST',
+      const isEdit = panelMode === 'edit' && viewProjectId;
+      const isDraft = action === 'draft';
+      const wantsSubmit = action === 'submit';
+      const url = isEdit
+        ? `http://localhost:5000/api/projects/${encodeURIComponent(viewProjectId as string)}`
+        : 'http://localhost:5000/api/projects';
+      const method = isEdit ? 'PATCH' : 'POST';
+
+      const response = await fetch(url, {
+        method,
         headers: {
           'Content-Type': 'application/json',
         },
@@ -2246,6 +2565,9 @@ export default function ProjectLeaderProjectsPage() {
             totalBudgetaryRequirements,
             trainingDesignHoursTotal,
           },
+          isDraft,
+          // When submitting an existing draft, explicitly mark as submitted
+          ...(isEdit && wantsSubmit ? { markSubmitted: true } : {}),
         }),
       });
 
@@ -2254,7 +2576,17 @@ export default function ProjectLeaderProjectsPage() {
         throw new Error(data.message || 'Failed to save project proposal');
       }
 
-      setSaveMessage('Project created successfully.');
+      const createdProject = (await response.json()) as LeaderProject;
+
+      setSaveMessage(
+        isDraft
+          ? isEdit
+            ? 'Proposal saved as draft.'
+            : 'Proposal created as draft.'
+          : isEdit
+          ? 'Project submitted successfully.'
+          : 'Project created and submitted successfully.',
+      );
       setViewProjectId(null);
       setViewProjectData(null);
 
@@ -2262,8 +2594,10 @@ export default function ProjectLeaderProjectsPage() {
       setPanelVisible(false);
       setTimeout(() => setPanelMounted(false), transitionMs);
 
-      // Show a success confirmation modal so the leader knows what happens next
-      setShowSubmitSuccess(true);
+      // Only show the "submitted" success modal when action was submit
+      if (wantsSubmit) {
+        setShowSubmitSuccess(true);
+      }
 
       try {
         const stored = window.localStorage.getItem('unihub-auth');
@@ -2298,7 +2632,15 @@ export default function ProjectLeaderProjectsPage() {
 
   const closePanel = () => {
     setPanelVisible(false);
-    setTimeout(() => setPanelMounted(false), transitionMs);
+    setTimeout(() => {
+      setPanelMounted(false);
+      // Remove URL params when closing the panel to allow re-opening the same project
+      const newUrl = new URL(window.location.href);
+      newUrl.searchParams.delete('highlightProjectId');
+      newUrl.searchParams.delete('openPanel');
+      newUrl.searchParams.delete('section');
+      window.history.replaceState({}, '', newUrl.toString());
+    }, transitionMs);
   };
 
   useEffect(() => {
@@ -2384,17 +2726,17 @@ export default function ProjectLeaderProjectsPage() {
               </div>
               <div className="grid gap-6 md:grid-cols-2 xl:grid-cols-3">
                 <div className="space-y-3">
-                  <h3 className="text-sm font-semibold text-gray-900">For approval projects</h3>
+                  <h3 className="text-sm font-semibold text-gray-900">Proposal projects</h3>
                   <div className="space-y-3">
                     {upcomingLeaderProjects.length === 0 ? (
-                      <p className="text-xs text-gray-600">No projects for approval.</p>
+                      <p className="text-xs text-gray-600">No proposal projects.</p>
                     ) : (
                       upcomingLeaderProjects.map((project) => renderProjectCard(project))
                     )}
                   </div>
                 </div>
                 <div className="space-y-3">
-                  <h3 className="text-sm font-semibold text-gray-900">Approved projects</h3>
+                  <h3 className="text-sm font-semibold text-gray-900">Submitted projects</h3>
                   <div className="space-y-3">
                     {ongoingLeaderProjects.length === 0 ? (
                       <p className="text-xs text-gray-600">No approved projects.</p>
@@ -2453,22 +2795,28 @@ export default function ProjectLeaderProjectsPage() {
                   <span className="text-xs font-medium text-green-600">{saveMessage}</span>
                 ) : null}
                 {panelMode === 'create' || panelMode === 'edit' ? (
-                  <button
-                    type="button"
-                    onClick={handleSaveProposal}
-                    disabled={isSaving}
-                    className="rounded-full bg-yellow-500 px-3 py-1 text-sm font-semibold text-white shadow hover:bg-yellow-600 disabled:cursor-not-allowed disabled:opacity-70"
-                  >
-                    {isSaving
-                      ? panelMode === 'create'
-                        ? 'Creating…'
-                        : 'Saving…'
-                      : panelMode === 'create'
-                      ? 'Create project'
-                      : 'Save project'}
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => handleSaveProposal('draft')}
+                      disabled={isSaving}
+                      className="rounded-full border border-yellow-300 bg-white px-3 py-1 text-sm font-semibold text-yellow-700 shadow-sm hover:bg-yellow-50 disabled:cursor-not-allowed disabled:opacity-70"
+                    >
+                      {isSaving ? 'Saving…' : 'Save as proposal'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleSaveProposal('submit')}
+                      disabled={isSaving}
+                      className="rounded-full bg-yellow-500 px-3 py-1 text-sm font-semibold text-white shadow hover:bg-yellow-600 disabled:cursor-not-allowed disabled:opacity-70"
+                    >
+                      {isSaving ? 'Submitting…' : 'Submit project'}
+                    </button>
+                  </div>
                 ) : null}
-                {panelMode === 'review' && currentPanelProjectStatus !== 'Approved' && (
+                {panelMode === 'review' &&
+                  // Only allow editing if the project is NOT submitted (i.e., it's a Draft)
+                  (projects.find((p) => p._id === viewProjectId)?.isSubmitted !== true) && (
                   <button
                     type="button"
                     onClick={() => setShowEditConfirm(true)}
@@ -2507,31 +2855,193 @@ export default function ProjectLeaderProjectsPage() {
                       </button>
                     );
                   })}
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActiveSectionId('applicants-section');
+                      if (viewProjectId) {
+                        fetchApplicantsForProject(viewProjectId);
+                      }
+                    }}
+                    className={`mt-2 block w-full rounded-lg px-3 py-2 text-left text-xs font-medium transition ${
+                      activeSectionId === 'applicants-section'
+                        ? 'bg-yellow-500 text-white shadow'
+                        : 'bg-white text-yellow-800 hover:bg-yellow-100'
+                    }`}
+                  >
+                    Applicants
+                  </button>
                 </nav>
               </aside>
               <div className="flex-1 overflow-y-auto px-4 py-6 sm:px-8" data-panel-content="true">
                 <div className="mx-auto w-full max-w-6xl space-y-6">
-                  <div className="rounded-xl border border-yellow-100 bg-yellow-50/60 p-4 text-xs text-yellow-800">
-                    <p className="font-semibold uppercase tracking-wide">Reminder</p>
-                    <p>
-                      Fill out each section completely. Required subsections and tables are provided to mirror the
-                      instructor-approved template.
-                    </p>
-                  </div>
-                  <div
-                    className={`space-y-5 text-sm text-gray-700 ${panelMode === 'review' ? 'pointer-events-none opacity-75' : ''}`}
-                  >
-                    {proposalSections.map((section) => (
-                      <div
-                        key={section.id}
-                        data-section-id={section.id}
-                        className={section.id === activeSectionId ? 'space-y-5' : 'hidden'}
-                        aria-hidden={section.id === activeSectionId ? 'false' : 'true'}
-                      >
-                        {section.content}
+                  {activeSectionId !== 'applicants-section' && (
+                    <>
+                      <div className="rounded-xl border border-yellow-100 bg-yellow-50/60 p-4 text-xs text-yellow-800">
+                        <p className="font-semibold uppercase tracking-wide">Reminder</p>
+                        <p>
+                          Fill out each section completely. Required subsections and tables are provided to mirror the
+                          instructor-approved template.
+                        </p>
                       </div>
-                    ))}
-                  </div>
+                      <div
+                        className={`space-y-5 text-sm text-gray-700 ${
+                          panelMode === 'review' ? 'pointer-events-none opacity-75' : ''
+                        }`}
+                      >
+                        {proposalSections.map((section) => (
+                          <div
+                            key={section.id}
+                            data-section-id={section.id}
+                            className={section.id === activeSectionId ? 'space-y-5' : 'hidden'}
+                            aria-hidden={section.id === activeSectionId ? 'false' : 'true'}
+                          >
+                            {section.content}
+                          </div>
+                        ))}
+                      </div>
+                    </>
+                  )}
+
+                  {activeSectionId === 'applicants-section' && (
+                    <section
+                      className="space-y-3 rounded-xl border border-yellow-100 bg-white p-4 text-xs text-gray-800"
+                      data-section-id="applicants-section"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <div>
+                          <h3 className="text-sm font-semibold text-gray-900">Applicants</h3>
+                          <p className="text-[11px] text-gray-600">
+                            Review join requests and approved participants for this project.
+                          </p>
+                        </div>
+                        {currentPanelProjectStatus === 'Approved' && (
+                          <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-700">
+                            Manage enabled
+                          </span>
+                        )}
+                      </div>
+
+                      {applicantsLoading ? (
+                        <p className="text-[11px] text-gray-600">Loading applicants…</p>
+                      ) : applicantsError ? (
+                        <p className="text-[11px] font-medium text-red-600">{applicantsError}</p>
+                      ) : applicants.length === 0 ? (
+                        <p className="text-[11px] text-gray-500">
+                          No applicants found for this project yet. New join requests will appear here.
+                        </p>
+                      ) : (
+                        <div className="overflow-x-auto rounded-lg border border-yellow-100 bg-yellow-50/50">
+                          <table className="min-w-full text-left text-[11px]">
+                            <thead className="bg-yellow-50 text-[10px] font-semibold uppercase tracking-wide text-gray-600">
+                              <tr>
+                                <th className="px-3 py-2">Name</th>
+                                <th className="px-3 py-2">Participant email</th>
+                                <th className="px-3 py-2">Status</th>
+                                <th className="px-3 py-2">Joined / Requested at</th>
+                                <th className="px-3 py-2 text-right">Actions</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {applicants.map((row) => (
+                                <tr key={row.id} className="border-t border-yellow-100 bg-white/80">
+                                  <td className="px-3 py-2 align-top text-[11px] text-gray-900">
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setSelectedApplicant(row);
+                                        setApplicantProfileOpen(true);
+                                      }}
+                                      className="max-w-xs truncate text-left font-semibold text-yellow-800 hover:underline"
+                                    >
+                                      {row.fullName || row.email}
+                                    </button>
+                                  </td>
+                                  <td className="px-3 py-2 align-top text-[11px] text-gray-900">{row.email}</td>
+                                  <td className="px-3 py-2 align-top text-[11px]">
+                                    <span
+                                      className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
+                                        row.status === 'Approved'
+                                          ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                                          : 'border-amber-200 bg-amber-50 text-amber-700'
+                                      }`}
+                                    >
+                                      {row.status === 'Approved' ? 'Approved' : 'Pending approval'}
+                                    </span>
+                                  </td>
+                                  <td className="px-3 py-2 align-top text-[11px] text-gray-600">{row.createdAtLabel}</td>
+                                  <td className="px-3 py-2 align-top text-right">
+                                    {currentPanelProjectStatus === 'Approved' && viewProjectId ? (
+                                      row.status === 'Pending' ? (
+                                        <div className="inline-flex flex-wrap justify-end gap-1">
+                                          <button
+                                            type="button"
+                                            onClick={() => {
+                                              setSelectedApplicant(row);
+                                              setApplicantProfileOpen(true);
+                                            }}
+                                            className="rounded-full border border-yellow-200 px-2 py-0.5 text-[10px] font-semibold text-yellow-700 hover:bg-yellow-50"
+                                          >
+                                            View profile
+                                          </button>
+                                          <button
+                                            type="button"
+                                            disabled={applicantRespondingId === row.email}
+                                            onClick={() =>
+                                              handleApplicantDecision(viewProjectId, row.email, 'approved')
+                                            }
+                                            className="rounded-full bg-emerald-500 px-2 py-0.5 text-[10px] font-semibold text-white shadow hover:bg-emerald-600 disabled:cursor-not-allowed disabled:opacity-60"
+                                          >
+                                            Approve
+                                          </button>
+                                          <button
+                                            type="button"
+                                            disabled={applicantRespondingId === row.email}
+                                            onClick={() =>
+                                              handleApplicantDecision(viewProjectId, row.email, 'declined')
+                                            }
+                                            className="rounded-full border border-red-200 px-2 py-0.5 text-[10px] font-semibold text-red-700 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-60"
+                                          >
+                                            Reject
+                                          </button>
+                                        </div>
+                                      ) : (
+                                        <div className="inline-flex flex-wrap justify-end gap-1">
+                                          <button
+                                            type="button"
+                                            onClick={() => {
+                                              setSelectedApplicant(row);
+                                              setApplicantProfileOpen(true);
+                                            }}
+                                            className="rounded-full border border-yellow-200 px-2 py-0.5 text-[10px] font-semibold text-yellow-700 hover:bg-yellow-50"
+                                          >
+                                            View profile
+                                          </button>
+                                          <button
+                                            type="button"
+                                            disabled={applicantRespondingId === row.email}
+                                            onClick={() => handleRemoveApprovedApplicant(viewProjectId, row.email)}
+                                            className="rounded-full border border-red-200 px-2 py-0.5 text-[10px] font-semibold text-red-700 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-60"
+                                          >
+                                            Remove
+                                          </button>
+                                        </div>
+                                      )
+                                    ) : (
+                                      <span className="text-[10px] text-gray-500">
+                                        Actions are disabled for this project status.
+                                      </span>
+                                    )}
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                    </section>
+                  )}
                 </div>
               </div>
             </div>
@@ -2574,6 +3084,195 @@ export default function ProjectLeaderProjectsPage() {
         </div>
       )}
 
+      {applicantProfileOpen && selectedApplicant && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4" role="dialog" aria-modal="true">
+          <div className="w-full max-w-md rounded-3xl border border-yellow-100 bg-white p-7 text-sm text-gray-800 shadow-2xl">
+            <div className="mb-4 flex items-start justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <div className="flex h-10 w-10 items-center justify-center rounded-full bg-yellow-100 text-xs font-semibold uppercase text-yellow-800">
+                  {(selectedApplicant.fullName || selectedApplicant.email)
+                    .split(' ')
+                    .map((part) => part.trim()[0])
+                    .filter(Boolean)
+                    .slice(0, 2)
+                    .join('')}
+                </div>
+                <div>
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-yellow-500">Applicant profile</p>
+                  <h3 className="mt-1 text-base font-semibold text-gray-900 break-words">
+                    {selectedApplicant.fullName || selectedApplicant.email}
+                  </h3>
+                  <p className="mt-0.5 text-[11px] text-gray-500 break-all">{selectedApplicant.email}</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setApplicantProfileOpen(false)}
+                className="rounded-full border border-yellow-200 px-3 py-0.5 text-[11px] font-semibold text-yellow-700 hover:bg-yellow-50"
+              >
+                Close
+              </button>
+            </div>
+
+            <div className="space-y-4 rounded-2xl bg-yellow-50/60 p-4 text-[11px] text-gray-700">
+              <div className="flex items-center justify-between">
+                <div className="space-y-0.5">
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-500">Status</p>
+                  <p className="text-[11px] text-gray-800">Current application status</p>
+                </div>
+                <span
+                  className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
+                    selectedApplicant.status === 'Approved'
+                      ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                      : 'border-amber-200 bg-amber-50 text-amber-700'
+                  }`}
+                >
+                  {selectedApplicant.status === 'Approved' ? 'Approved' : 'Pending approval'}
+                </span>
+              </div>
+
+              <div className="border-t border-yellow-100 pt-3">
+                <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-500">Joined / requested at</p>
+                <p className="mt-0.5 text-[11px] font-medium text-gray-800">{selectedApplicant.createdAtLabel || '—'}</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {extensionModalOpen && activitiesModalProject && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4"
+          role="dialog"
+          aria-modal="true"
+        >
+          <div className="w-full max-w-xl rounded-2xl border border-yellow-100 bg-white p-6 text-sm text-gray-800 shadow-2xl">
+            <div className="mb-4 flex items-start justify-between gap-3">
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-yellow-500">Extension activities</p>
+                <h3 className="mt-1 text-base font-semibold text-gray-900 line-clamp-1">
+                  {activitiesModalProject.name}
+                </h3>
+                <p className="mt-1 text-[11px] text-gray-500">
+                  Define or update extension activities (topics, hours, and resource persons) for this project.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setExtensionModalOpen(false)}
+                className="rounded-full border border-yellow-200 px-3 py-1 text-xs font-semibold text-yellow-700 hover:bg-yellow-50"
+              >
+                Close
+              </button>
+            </div>
+
+            <div className="space-y-3 text-xs">
+              {extensionError && (
+                <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-[11px] font-medium text-red-700">
+                  {extensionError}
+                </p>
+              )}
+
+              <div className="max-h-80 space-y-2 overflow-y-auto rounded-xl border border-yellow-100 bg-yellow-50/40 p-3">
+                {extensionRows.map((row, index) => (
+                  <div
+                    key={index}
+                    className="grid gap-2 rounded-lg bg-white/80 p-3 text-[11px] shadow-sm sm:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,2fr)]"
+                  >
+                    <div className="space-y-1">
+                      <label className="font-semibold text-gray-700">Topic</label>
+                      <input
+                        type="text"
+                        className="w-full rounded-md border border-yellow-200 bg-white px-2 py-1 text-xs text-gray-900 focus:border-yellow-400 focus:outline-none focus:ring-2 focus:ring-yellow-200"
+                        value={row.topic}
+                        onChange={(event) => {
+                          const value = event.target.value;
+                          setExtensionRows((prev) => {
+                            const next = [...prev];
+                            next[index] = { ...next[index], topic: value };
+                            return next;
+                          });
+                        }}
+                        placeholder="e.g., Financial literacy session"
+                      />
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="font-semibold text-gray-700">Hours</label>
+                      <input
+                        type="number"
+                        min={0}
+                        step="0.5"
+                        className="w-full rounded-md border border-yellow-200 bg-white px-2 py-1 text-xs text-gray-900 focus:border-yellow-400 focus:outline-none focus:ring-2 focus:ring-yellow-200"
+                        value={row.hours}
+                        onChange={(event) => {
+                          const value = event.target.value;
+                          setExtensionRows((prev) => {
+                            const next = [...prev];
+                            next[index] = { ...next[index], hours: value };
+                            return next;
+                          });
+                        }}
+                        placeholder="e.g., 2"
+                      />
+                    </div>
+
+                    <div className="space-y-1 sm:col-span-1">
+                      <label className="font-semibold text-gray-700">Resource person</label>
+                      <input
+                        type="text"
+                        className="w-full rounded-md border border-yellow-200 bg-white px-2 py-1 text-xs text-gray-900 focus:border-yellow-400 focus:outline-none focus:ring-2 focus:ring-yellow-200"
+                        value={row.resourcePerson}
+                        onChange={(event) => {
+                          const value = event.target.value;
+                          setExtensionRows((prev) => {
+                            const next = [...prev];
+                            next[index] = { ...next[index], resourcePerson: value };
+                            return next;
+                          });
+                        }}
+                        placeholder="e.g., Prof. Juan Dela Cruz"
+                      />
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <div className="mt-3 flex items-center justify-between text-[11px] text-gray-600">
+                <p>Leave a row blank to ignore it when saving.</p>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setExtensionRows((prev) => [...prev, { topic: '', hours: '', resourcePerson: '' }])
+                  }
+                  className="rounded-full border border-yellow-200 px-3 py-1 text-[11px] font-semibold text-yellow-700 hover:bg-yellow-50"
+                >
+                  Add another row
+                </button>
+              </div>
+
+              <div className="mt-4 flex justify-end gap-2 text-xs">
+                <button
+                  type="button"
+                  onClick={() => setExtensionModalOpen(false)}
+                  className="rounded-full border border-yellow-200 px-3 py-1 font-semibold text-yellow-700 hover:bg-yellow-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSaveExtensionActivities}
+                  disabled={extensionSaving}
+                  className="rounded-full bg-yellow-500 px-3 py-1 font-semibold text-white shadow hover:bg-yellow-600 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {extensionSaving ? 'Saving…' : 'Save activities'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {activitiesModalOpen && activitiesModalProject && (
         <div
           className="fixed inset-0 z-40 flex bg-black/40 backdrop-blur-sm"
@@ -2602,8 +3301,7 @@ export default function ProjectLeaderProjectsPage() {
                       openExtensionActivitiesModal();
                     }
                   }}
-                  disabled={!selectedProjectIsCompleted && !canExtendActivitiesForCurrentProject}
-                  className="rounded-full border border-yellow-200 px-3 py-1 text-xs font-semibold text-yellow-700 hover:bg-yellow-50 disabled:cursor-not-allowed disabled:opacity-60"
+                  className="rounded-full border border-yellow-200 px-3 py-1 text-xs font-semibold text-yellow-700 hover:bg-yellow-50"
                 >
                   {selectedProjectIsCompleted ? 'Terminal reports' : 'Add / extend activities'}
                 </button>
@@ -3191,34 +3889,6 @@ export default function ProjectLeaderProjectsPage() {
                   </div>
                 )}
               </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {showSubmitSuccess && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" role="dialog" aria-modal="true">
-          <div className="w-full max-w-sm rounded-2xl border border-yellow-100 bg-white p-6 shadow-xl">
-            <div className="mb-3 flex items-center gap-3">
-              <div className="flex h-9 w-9 items-center justify-center rounded-full bg-emerald-100 text-emerald-600">
-                <CheckCircle2 className="h-5 w-5" />
-              </div>
-              <div>
-                <h3 className="text-sm font-semibold text-gray-900">Project submitted</h3>
-                <p className="text-[11px] text-gray-500">Your proposal has been sent to the admin for review.</p>
-              </div>
-            </div>
-            <p className="text-xs text-gray-700">
-              The project has been submitted, wait for the admin approval.
-            </p>
-            <div className="mt-4 flex justify-end gap-2 text-xs">
-              <button
-                type="button"
-                onClick={() => setShowSubmitSuccess(false)}
-                className="rounded-full border border-gray-200 px-3 py-1 font-semibold text-gray-700 hover:bg-gray-50"
-              >
-                Close
-              </button>
             </div>
           </div>
         </div>
