@@ -2332,6 +2332,15 @@ export default function ProjectLeaderProjectsPage() {
 
     const root = panelRef.current;
 
+    // Use a more generic selector or ensure IDs are correct.
+    // Sometimes components might re-render, so we might need a MutationObserver if elements appear later.
+    // For now, let's try to attach event listeners more robustly or on a parent delegate if possible,
+    // but the direct input selection is simplest if they exist.
+
+    // Re-select inputs every time activeSectionId changes might help if they are conditionally rendered?
+    // But sections are hidden with css (display:none) usually, not unmounted.
+    // Let's check how sections are rendered. They seem to be all rendered but hidden.
+
     const summaryTitleInput = root.querySelector<HTMLInputElement>(
       '[data-section-id="project-summary"] input[placeholder="Enter project title"]',
     );
@@ -2342,16 +2351,29 @@ export default function ProjectLeaderProjectsPage() {
     if (!summaryTitleInput || !trainingTitleInput) return;
 
     const syncTitle = () => {
-      trainingTitleInput.value = summaryTitleInput.value;
+      // Only sync if the target is empty or we want to overwrite it always?
+      // Usually one-way sync from summary to training design is expected.
+      if (trainingTitleInput.value !== summaryTitleInput.value) {
+        trainingTitleInput.value = summaryTitleInput.value;
+        // Dispatch input event so React/other listeners know it changed if needed
+        trainingTitleInput.dispatchEvent(new Event('input', { bubbles: true }));
+      }
     };
 
+    // Sync immediately
     syncTitle();
+
+    // Listen for changes
     summaryTitleInput.addEventListener('input', syncTitle);
+    summaryTitleInput.addEventListener('change', syncTitle);
+    summaryTitleInput.addEventListener('blur', syncTitle);
 
     return () => {
       summaryTitleInput.removeEventListener('input', syncTitle);
+      summaryTitleInput.removeEventListener('change', syncTitle);
+      summaryTitleInput.removeEventListener('blur', syncTitle);
     };
-  }, [panelVisible]);
+  }, [panelVisible, activeSectionId]); // Added activeSectionId to re-attach if DOM changes
 
   useEffect(() => {
     if (!panelRef.current) return;
@@ -3146,7 +3168,7 @@ export default function ProjectLeaderProjectsPage() {
           role="dialog"
           aria-modal="true"
         >
-          <div className="w-full max-w-xl rounded-2xl border border-yellow-100 bg-white p-6 text-sm text-gray-800 shadow-2xl">
+          <div className="w-full max-w-4xl rounded-2xl border border-yellow-100 bg-white p-6 text-sm text-gray-800 shadow-2xl">
             <div className="mb-4 flex items-start justify-between gap-3">
               <div>
                 <p className="text-[11px] font-semibold uppercase tracking-wide text-yellow-500">Extension activities</p>
@@ -3166,88 +3188,116 @@ export default function ProjectLeaderProjectsPage() {
               </button>
             </div>
 
-            <div className="space-y-3 text-xs">
+            <div className="space-y-4">
               {extensionError && (
                 <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-[11px] font-medium text-red-700">
                   {extensionError}
                 </p>
               )}
 
-              <div className="max-h-80 space-y-2 overflow-y-auto rounded-xl border border-yellow-100 bg-yellow-50/40 p-3">
-                {extensionRows.map((row, index) => (
-                  <div
-                    key={index}
-                    className="grid gap-2 rounded-lg bg-white/80 p-3 text-[11px] shadow-sm sm:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,2fr)]"
-                  >
-                    <div className="space-y-1">
-                      <label className="font-semibold text-gray-700">Topic</label>
-                      <input
-                        type="text"
-                        className="w-full rounded-md border border-yellow-200 bg-white px-2 py-1 text-xs text-gray-900 focus:border-yellow-400 focus:outline-none focus:ring-2 focus:ring-yellow-200"
-                        value={row.topic}
-                        onChange={(event) => {
-                          const value = event.target.value;
-                          setExtensionRows((prev) => {
-                            const next = [...prev];
-                            next[index] = { ...next[index], topic: value };
-                            return next;
-                          });
-                        }}
-                        placeholder="e.g., Financial literacy session"
-                      />
-                    </div>
-
-                    <div className="space-y-1">
-                      <label className="font-semibold text-gray-700">Hours</label>
-                      <input
-                        type="number"
-                        min={0}
-                        step="0.5"
-                        className="w-full rounded-md border border-yellow-200 bg-white px-2 py-1 text-xs text-gray-900 focus:border-yellow-400 focus:outline-none focus:ring-2 focus:ring-yellow-200"
-                        value={row.hours}
-                        onChange={(event) => {
-                          const value = event.target.value;
-                          setExtensionRows((prev) => {
-                            const next = [...prev];
-                            next[index] = { ...next[index], hours: value };
-                            return next;
-                          });
-                        }}
-                        placeholder="e.g., 2"
-                      />
-                    </div>
-
-                    <div className="space-y-1 sm:col-span-1">
-                      <label className="font-semibold text-gray-700">Resource person</label>
-                      <input
-                        type="text"
-                        className="w-full rounded-md border border-yellow-200 bg-white px-2 py-1 text-xs text-gray-900 focus:border-yellow-400 focus:outline-none focus:ring-2 focus:ring-yellow-200"
-                        value={row.resourcePerson}
-                        onChange={(event) => {
-                          const value = event.target.value;
-                          setExtensionRows((prev) => {
-                            const next = [...prev];
-                            next[index] = { ...next[index], resourcePerson: value };
-                            return next;
-                          });
-                        }}
-                        placeholder="e.g., Prof. Juan Dela Cruz"
-                      />
-                    </div>
-                  </div>
-                ))}
+              <div className="grid gap-4 md:grid-cols-1">
+                <label className="flex flex-col gap-1 text-sm font-medium text-gray-900">
+                  Project Title
+                  <input className={inputClassName} value={activitiesModalProject.name} readOnly />
+                </label>
               </div>
 
-              <div className="mt-3 flex items-center justify-between text-[11px] text-gray-600">
-                <p>Leave a row blank to ignore it when saving.</p>
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[640px] border border-yellow-200 text-sm text-gray-700">
+                  <thead>
+                    <tr>
+                      <th className={tableHeadCellClassName}>Competencies / Topics</th>
+                      <th className={tableHeadCellClassName}>Number of Hours</th>
+                      <th className={tableHeadCellClassName}>Resource Person</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {extensionRows.map((row, index) => (
+                      <tr key={index}>
+                        <td className={tableCellClassName}>
+                          <input
+                            type="text"
+                            className="w-full border-none bg-transparent text-sm text-gray-900 focus:outline-none focus:ring-0"
+                            value={row.topic}
+                            onChange={(event) => {
+                              const value = event.target.value;
+                              setExtensionRows((prev) => {
+                                const next = [...prev];
+                                next[index] = { ...next[index], topic: value };
+                                return next;
+                              });
+                            }}
+                          />
+                        </td>
+                        <td className={tableCellClassName}>
+                          <input
+                            type="number"
+                            min={0}
+                            step="0.5"
+                            className="w-full border-none bg-transparent text-sm text-gray-900 focus:outline-none focus:ring-0"
+                            value={row.hours}
+                            onChange={(event) => {
+                              const value = event.target.value;
+                              setExtensionRows((prev) => {
+                                const next = [...prev];
+                                next[index] = { ...next[index], hours: value };
+                                return next;
+                              });
+                            }}
+                          />
+                        </td>
+                        <td className={tableCellClassName}>
+                          <input
+                            type="text"
+                            className="w-full border-none bg-transparent text-sm text-gray-900 focus:outline-none focus:ring-0"
+                            value={row.resourcePerson}
+                            onChange={(event) => {
+                              const value = event.target.value;
+                              setExtensionRows((prev) => {
+                                const next = [...prev];
+                                next[index] = { ...next[index], resourcePerson: value };
+                                return next;
+                              });
+                            }}
+                          />
+                        </td>
+                      </tr>
+                    ))}
+                    <tr>
+                      <td className={`font-semibold text-gray-900 ${tableCellClassName}`}>Total Hours</td>
+                      <td className={`font-semibold text-gray-900 ${tableCellClassName}`}>
+                        {(() => {
+                          const sum = extensionRows.reduce((acc, row) => {
+                            const val = parseFloat(row.hours);
+                            return acc + (Number.isFinite(val) ? val : 0);
+                          }, 0);
+                          return sum > 0 ? sum.toString() : '';
+                        })()}
+                      </td>
+                      <td className={tableCellClassName}></td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="mt-3 flex justify-end gap-2 text-xs">
                 <button
                   type="button"
                   onClick={() =>
                     setExtensionRows((prev) => [...prev, { topic: '', hours: '', resourcePerson: '' }])
                   }
-                  className="rounded-full border border-yellow-200 px-3 py-1 text-[11px] font-semibold text-yellow-700 hover:bg-yellow-50"
+                  className="rounded-full border border-yellow-200 px-3 py-1 font-semibold text-yellow-700 transition hover:bg-yellow-50"
                 >
-                  Add another row
+                  Add row
+                </button>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setExtensionRows((prev) => (prev.length > 1 ? prev.slice(0, -1) : prev))
+                  }
+                  className="rounded-full border border-yellow-200 px-3 py-1 font-semibold text-yellow-700 transition hover:bg-yellow-50"
+                >
+                  Delete row
                 </button>
               </div>
 

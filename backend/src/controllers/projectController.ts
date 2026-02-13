@@ -403,9 +403,11 @@ export const updateActivitySchedule = async (req: Request, res: Response) => {
       return res.status(404).json({ message: 'Project not found' });
     }
 
-    if ((project as any).isSubmitted) {
-      return res.status(400).json({ message: 'Submitted projects cannot be edited.' });
-    }
+    // Activity scheduling IS allowed for submitted/approved projects because that's when scheduling happens.
+    // The restriction on editing main proposal fields (name, description, sections) remains in updateProject.
+    // if ((project as any).isSubmitted) {
+    //   return res.status(400).json({ message: 'Submitted projects cannot be edited.' });
+    // }
 
     let parsedStart: Date | undefined;
     let parsedEnd: Date | undefined;
