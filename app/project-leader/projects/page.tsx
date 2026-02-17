@@ -181,6 +181,240 @@ export default function ProjectLeaderProjectsPage() {
   const [applicantProfileOpen, setApplicantProfileOpen] = useState(false);
   const [selectedApplicant, setSelectedApplicant] = useState<ApplicantRow | null>(null);
 
+  const getProjectActivities = (project: LeaderProject): ProjectActivity[] => {
+    const fullProject = project as any;
+    const trainingSnapshot =
+      fullProject && fullProject.proposalData && fullProject.proposalData['training-design'];
+
+    let parsed: ProjectActivity[] = [];
+
+    const schedule: Array<{ activityId: number; startAt?: string; endAt?: string; location?: string | null }> =
+      Array.isArray((project as any).activitySchedule)
+        ? ((project as any).activitySchedule as any[]).map((item) => ({
+            activityId: Number(item.activityId),
+            startAt: item.startAt as string | undefined,
+            endAt: item.endAt as string | undefined,
+            location: typeof item.location === 'string' ? item.location : undefined,
+          }))
+        : [];
+
+    if (trainingSnapshot && Array.isArray(trainingSnapshot.editableCells)) {
+      const cells: string[] = trainingSnapshot.editableCells;
+      let activityIndexCounter = 0;
+
+      // For training design, editableCells are stored as pairs per row:
+      // [topicRow0, resourceRow0, topicRow1, resourceRow1, ... , footerResourceCell]
+      for (let i = 0; i + 1 < cells.length; i += 2) {
+        const title = (cells[i] || '').trim();
+        const resourcePerson = (cells[i + 1] || '').trim();
+
+        // Skip rows without a topic (also skips the final 'Total Hours' resource-only cell)
+        if (!title) {
+          continue;
+        }
+
+        const scheduleEntry = schedule.find((item) => item.activityId === activityIndexCounter);
+
+        parsed.push({
+          activityId: activityIndexCounter,
+          title,
+          resourcePerson: resourcePerson || undefined,
+          startAt: scheduleEntry?.startAt ?? null,
+          endAt: scheduleEntry?.endAt ?? null,
+          location: scheduleEntry?.location ?? null,
+        });
+
+        activityIndexCounter += 1;
+      }
+    }
+
+    // Append any saved extension activities as additional entries
+    try {
+      const existingExt: Array<{ topic?: string; hours?: number | null; resourcePerson?: string }> =
+        Array.isArray(fullProject.extensionActivities) ? fullProject.extensionActivities : [];
+
+      if (existingExt.length > 0) {
+        let nextActivityId = parsed.length
+          ? parsed.reduce((max, item) => (item.activityId > max ? item.activityId : max), parsed[0].activityId) + 1
+          : 0;
+
+        existingExt.forEach((item, index) => {
+          const rawTopic = typeof item.topic === 'string' ? item.topic.trim() : '';
+          const title = rawTopic || `Extension activity ${index + 1}`;
+
+          if (!title) return;
+
+          const numericHours =
+            typeof item.hours === 'number' && Number.isFinite(item.hours) && item.hours >= 0
+              ? String(item.hours)
+              : undefined;
+          const resourcePerson =
+            typeof item.resourcePerson === 'string' && item.resourcePerson.trim()
+              ? item.resourcePerson.trim()
+              : undefined;
+
+          const scheduleEntry = schedule.find((entry) => entry.activityId === nextActivityId);
+
+          parsed.push({
+            activityId: nextActivityId,
+            title,
+            hours: numericHours,
+            resourcePerson,
+            startAt: scheduleEntry?.startAt ?? null,
+            endAt: scheduleEntry?.endAt ?? null,
+            location: scheduleEntry?.location ?? null,
+          });
+
+          nextActivityId += 1;
+        });
+      }
+    } catch {
+      // ignore extension parsing errors
+    }
+
+    if (highlightedProjectActivity && highlightedProjectActivity.projectId === project._id) {
+      parsed = [...parsed].sort((a, b) => {
+        const isAHighlighted = a.title === highlightedProjectActivity.activityTitle;
+        const isBHighlighted = b.title === highlightedProjectActivity.activityTitle;
+        if (isAHighlighted === isBHighlighted) return 0;
+        return isAHighlighted ? -1 : 1;
+      });
+    }
+
+    return parsed;
+  };
+
+  const fetchTerminalReport = async (project: LeaderProject, activities: ProjectActivity[]) => {
+    setTerminalReportOpen(true);
+    setTerminalReportLoading(true);
+    setTerminalReportError(null);
+    setTerminalReportTotals(null);
+
+    try {
+      const projectId = project._id;
+      const now = nowMs;
+
+      const endedActivities = activities.filter((activity) => {
+        const endDate = activity.endAt ? new Date(activity.endAt) : undefined;
+        const hasValidEnd = !!endDate && !Number.isNaN(endDate.getTime());
+        return hasValidEnd && endDate!.getTime() < now;
+      });
+
+      const totalActivities = endedActivities.length;
+
+      let totalRegistrations = 0;
+      let present = 0;
+      let absent = 0;
+      const activitySummaries: Array<{ title: string; present: number; absent: number; total: number }> = [];
+
+      let activeBeneficiaryEmails = new Set<string>();
+      try {
+        const benRes = await fetch(`http://localhost:5000/api/projects/${projectId}/beneficiaries`);
+        if (benRes.ok) {
+          const benData = (await benRes.json()) as Array<{
+            email: string;
+            status: 'active' | 'removed';
+          }>;
+          benData
+            .filter((b) => b.status === 'active')
+            .forEach((b) => {
+              const email = typeof b.email === 'string' ? b.email.trim() : '';
+              if (email) {
+                activeBeneficiaryEmails.add(email);
+              }
+            });
+        }
+      } catch {
+        activeBeneficiaryEmails = new Set<string>();
+      }
+
+      const registrationEmails = new Set<string>();
+
+      for (const activity of endedActivities) {
+        let activityPresent = 0;
+        let activityAbsent = 0;
+        let activityTotal = 0;
+        try {
+          const regRes = await fetch(
+            `http://localhost:5000/api/projects/${projectId}/activities/${activity.activityId}/registrations`,
+          );
+          if (!regRes.ok) {
+            continue;
+          }
+
+          const regData = (await regRes.json()) as Array<{
+            participantEmail: string;
+            status: 'registered' | 'present' | 'absent';
+          }>;
+
+          totalRegistrations += regData.length;
+
+          regData.forEach((row) => {
+            const email = typeof row.participantEmail === 'string' ? row.participantEmail.trim() : '';
+            if (email) {
+              registrationEmails.add(email);
+            }
+            if (row.status === 'present') {
+              present += 1;
+              activityPresent += 1;
+            } else if (row.status === 'absent') {
+              absent += 1;
+              activityAbsent += 1;
+            }
+            activityTotal += 1;
+          });
+        } catch {
+          continue;
+        }
+
+        activitySummaries.push({
+          title: activity.title,
+          present: activityPresent,
+          absent: activityAbsent,
+          total: activityTotal,
+        });
+      }
+
+      let matched = 0;
+      activeBeneficiaryEmails.forEach((email) => {
+        if (registrationEmails.has(email)) {
+          matched += 1;
+        }
+      });
+
+      const notOnAttendance = Math.max(activeBeneficiaryEmails.size - matched, 0);
+
+      setTerminalReportTotals({
+        totalActivities,
+        totalRegistrations,
+        present,
+        absent,
+        notOnAttendance,
+        activities: activitySummaries,
+      });
+    } catch (error: any) {
+      setTerminalReportError(error.message || 'Failed to load terminal report');
+    } finally {
+      setTerminalReportLoading(false);
+    }
+  };
+
+  const openTerminalReportForCurrentProject = async () => {
+    if (!activitiesModalProject) {
+      return;
+    }
+    await fetchTerminalReport(activitiesModalProject, activitiesForModal);
+  };
+
+  const openTerminalReportFromCard = (project: LeaderProject) => {
+    const activities = getProjectActivities(project);
+    setActivitiesModalProject(project);
+    setActivitiesForModal(activities);
+    // Ensure the activities modal is NOT opened, only the terminal report modal
+    setActivitiesModalOpen(false); 
+    fetchTerminalReport(project, activities);
+  };
+
   const renderProjectCard = (project: LeaderProject) => {
     const status = project.status || 'Pending';
     const isSubmitted = project.isSubmitted === true;
@@ -234,16 +468,28 @@ export default function ProjectLeaderProjectsPage() {
           </div>
           <div className="relative flex items-center gap-2">
             {status === 'Approved' && (
-              <button
-                type="button"
-                onClick={(event) => {
-                  event.stopPropagation();
-                  openActivitiesModal(project);
-                }}
-                className="rounded-full border border-yellow-200 px-3 py-1 font-semibold text-yellow-700 transition hover:bg-yellow-50"
-              >
-                View activities
-              </button>
+              <>
+                <button
+                  type="button"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    openActivitiesModal(project);
+                  }}
+                  className="rounded-full border border-yellow-200 px-3 py-1 font-semibold text-yellow-700 transition hover:bg-yellow-50"
+                >
+                  View activities
+                </button>
+                <button
+                  type="button"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    openTerminalReportFromCard(project);
+                  }}
+                  className="rounded-full border border-yellow-200 px-3 py-1 font-semibold text-yellow-700 transition hover:bg-yellow-50"
+                >
+                  Terminal report
+                </button>
+              </>
             )}
             <button
               type="button"
@@ -1405,105 +1651,7 @@ export default function ProjectLeaderProjectsPage() {
   };
 
   const openActivitiesModal = (project: LeaderProject) => {
-    const fullProject = project as any;
-    const trainingSnapshot =
-      fullProject && fullProject.proposalData && fullProject.proposalData['training-design'];
-
-    let parsed: ProjectActivity[] = [];
-
-    const schedule: Array<{ activityId: number; startAt?: string; endAt?: string; location?: string | null }> =
-      Array.isArray((project as any).activitySchedule)
-        ? ((project as any).activitySchedule as any[]).map((item) => ({
-            activityId: Number(item.activityId),
-            startAt: item.startAt as string | undefined,
-            endAt: item.endAt as string | undefined,
-            location: typeof item.location === 'string' ? item.location : undefined,
-          }))
-        : [];
-
-    if (trainingSnapshot && Array.isArray(trainingSnapshot.editableCells)) {
-      const cells: string[] = trainingSnapshot.editableCells;
-      let activityIndexCounter = 0;
-
-      // For training design, editableCells are stored as pairs per row:
-      // [topicRow0, resourceRow0, topicRow1, resourceRow1, ... , footerResourceCell]
-      for (let i = 0; i + 1 < cells.length; i += 2) {
-        const title = (cells[i] || '').trim();
-        const resourcePerson = (cells[i + 1] || '').trim();
-
-        // Skip rows without a topic (also skips the final 'Total Hours' resource-only cell)
-        if (!title) {
-          continue;
-        }
-
-        const scheduleEntry = schedule.find((item) => item.activityId === activityIndexCounter);
-
-        parsed.push({
-          activityId: activityIndexCounter,
-          title,
-          resourcePerson: resourcePerson || undefined,
-          startAt: scheduleEntry?.startAt ?? null,
-          endAt: scheduleEntry?.endAt ?? null,
-          location: scheduleEntry?.location ?? null,
-        });
-
-        activityIndexCounter += 1;
-      }
-    }
-
-    // Append any saved extension activities as additional entries
-    try {
-      const existingExt: Array<{ topic?: string; hours?: number | null; resourcePerson?: string }> =
-        Array.isArray(fullProject.extensionActivities) ? fullProject.extensionActivities : [];
-
-      if (existingExt.length > 0) {
-        let nextActivityId = parsed.length
-          ? parsed.reduce((max, item) => (item.activityId > max ? item.activityId : max), parsed[0].activityId) + 1
-          : 0;
-
-        existingExt.forEach((item, index) => {
-          const rawTopic = typeof item.topic === 'string' ? item.topic.trim() : '';
-          const title = rawTopic || `Extension activity ${index + 1}`;
-
-          if (!title) return;
-
-          const numericHours =
-            typeof item.hours === 'number' && Number.isFinite(item.hours) && item.hours >= 0
-              ? String(item.hours)
-              : undefined;
-          const resourcePerson =
-            typeof item.resourcePerson === 'string' && item.resourcePerson.trim()
-              ? item.resourcePerson.trim()
-              : undefined;
-
-          const scheduleEntry = schedule.find((entry) => entry.activityId === nextActivityId);
-
-          parsed.push({
-            activityId: nextActivityId,
-            title,
-            hours: numericHours,
-            resourcePerson,
-            startAt: scheduleEntry?.startAt ?? null,
-            endAt: scheduleEntry?.endAt ?? null,
-            location: scheduleEntry?.location ?? null,
-          });
-
-          nextActivityId += 1;
-        });
-      }
-    } catch {
-      // ignore extension parsing errors
-    }
-
-    if (highlightedProjectActivity && highlightedProjectActivity.projectId === project._id) {
-      parsed = [...parsed].sort((a, b) => {
-        const isAHighlighted = a.title === highlightedProjectActivity.activityTitle;
-        const isBHighlighted = b.title === highlightedProjectActivity.activityTitle;
-        if (isAHighlighted === isBHighlighted) return 0;
-        return isAHighlighted ? -1 : 1;
-      });
-    }
-
+    const parsed = getProjectActivities(project);
     setActivitiesForModal(parsed);
     setActivitiesModalProject(project);
     setActivitiesModalOpen(true);
@@ -1950,124 +2098,7 @@ export default function ProjectLeaderProjectsPage() {
     setAttendanceViewOpen(true);
   };
 
-  const openTerminalReportForCurrentProject = async () => {
-    if (!activitiesModalProject) {
-      return;
-    }
 
-    setTerminalReportOpen(true);
-    setTerminalReportLoading(true);
-    setTerminalReportError(null);
-    setTerminalReportTotals(null);
-
-    try {
-      const projectId = activitiesModalProject._id;
-      const now = nowMs;
-
-      const endedActivities = activitiesForModal.filter((activity) => {
-        const endDate = activity.endAt ? new Date(activity.endAt) : undefined;
-        const hasValidEnd = !!endDate && !Number.isNaN(endDate.getTime());
-        return hasValidEnd && endDate!.getTime() < now;
-      });
-
-      const totalActivities = endedActivities.length;
-
-      let totalRegistrations = 0;
-      let present = 0;
-      let absent = 0;
-      const activitySummaries: Array<{ title: string; present: number; absent: number; total: number }> = [];
-
-      let activeBeneficiaryEmails = new Set<string>();
-      try {
-        const benRes = await fetch(`http://localhost:5000/api/projects/${projectId}/beneficiaries`);
-        if (benRes.ok) {
-          const benData = (await benRes.json()) as Array<{
-            email: string;
-            status: 'active' | 'removed';
-          }>;
-          benData
-            .filter((b) => b.status === 'active')
-            .forEach((b) => {
-              const email = typeof b.email === 'string' ? b.email.trim() : '';
-              if (email) {
-                activeBeneficiaryEmails.add(email);
-              }
-            });
-        }
-      } catch {
-        activeBeneficiaryEmails = new Set<string>();
-      }
-
-      const registrationEmails = new Set<string>();
-
-      for (const activity of endedActivities) {
-        let activityPresent = 0;
-        let activityAbsent = 0;
-        let activityTotal = 0;
-        try {
-          const regRes = await fetch(
-            `http://localhost:5000/api/projects/${projectId}/activities/${activity.activityId}/registrations`,
-          );
-          if (!regRes.ok) {
-            continue;
-          }
-
-          const regData = (await regRes.json()) as Array<{
-            participantEmail: string;
-            status: 'registered' | 'present' | 'absent';
-          }>;
-
-          totalRegistrations += regData.length;
-
-          regData.forEach((row) => {
-            const email = typeof row.participantEmail === 'string' ? row.participantEmail.trim() : '';
-            if (email) {
-              registrationEmails.add(email);
-            }
-            if (row.status === 'present') {
-              present += 1;
-              activityPresent += 1;
-            } else if (row.status === 'absent') {
-              absent += 1;
-              activityAbsent += 1;
-            }
-            activityTotal += 1;
-          });
-        } catch {
-          continue;
-        }
-
-        activitySummaries.push({
-          title: activity.title,
-          present: activityPresent,
-          absent: activityAbsent,
-          total: activityTotal,
-        });
-      }
-
-      let matched = 0;
-      activeBeneficiaryEmails.forEach((email) => {
-        if (registrationEmails.has(email)) {
-          matched += 1;
-        }
-      });
-
-      const notOnAttendance = Math.max(activeBeneficiaryEmails.size - matched, 0);
-
-      setTerminalReportTotals({
-        totalActivities,
-        totalRegistrations,
-        present,
-        absent,
-        notOnAttendance,
-        activities: activitySummaries,
-      });
-    } catch (error: any) {
-      setTerminalReportError(error.message || 'Failed to load terminal report');
-    } finally {
-      setTerminalReportLoading(false);
-    }
-  };
 
   const handleAttendanceUpdate = async (email: string, status: 'present' | 'absent') => {
     if (!activitiesModalProject || !attendanceActivity) {
@@ -2414,23 +2445,122 @@ export default function ProjectLeaderProjectsPage() {
     if (!viewProjectData) return;
     if (!(panelMode === 'review' || panelMode === 'edit')) return;
 
-    try {
-      const proposal: any = (viewProjectData as any).proposalData;
-      if (!proposal || typeof proposal !== 'object') return;
+    let timeoutId: number;
 
-      for (const section of proposalSections) {
-        const snapshot = proposal[section.id];
-        const container = panelRef.current.querySelector<HTMLElement>(
-          `[data-section-id="${section.id}"]`,
-        );
-        if (container && snapshot && typeof snapshot.htmlContent === 'string') {
-          container.innerHTML = snapshot.htmlContent;
+    const restore = () => {
+      try {
+        const proposal: any = (viewProjectData as any).proposalData;
+        if (!proposal || typeof proposal !== 'object') return;
+
+        // 1. Restore row counts from HTML structure to ensure React renders enough rows
+        // We use a temporary container to parse the saved HTML structure without injecting it yet
+        const tempDiv = document.createElement('div');
+        
+        if (proposal['rationale']?.htmlContent) {
+          tempDiv.innerHTML = proposal['rationale'].htmlContent;
+          const rows = tempDiv.querySelectorAll('table tbody tr');
+          if (rows.length > 0) setFgdRowCount(rows.length);
         }
+
+        if (proposal['implementation-plan']?.htmlContent) {
+          tempDiv.innerHTML = proposal['implementation-plan'].htmlContent;
+          const rows = tempDiv.querySelectorAll('table tbody tr');
+          if (rows.length > 0) setImplementationRowCount(rows.length);
+        }
+
+        if (proposal['budgetary-requirement']?.htmlContent) {
+          tempDiv.innerHTML = proposal['budgetary-requirement'].htmlContent;
+          const tables = tempDiv.querySelectorAll('table');
+          // Table 1: Training Expenses
+          if (tables[0]) {
+            const rows = tables[0].querySelectorAll('tbody tr');
+            // Subtract 1 for the subtotal row
+            if (rows.length > 1) setTrainingExpensesRowCount(rows.length - 1);
+          }
+          // Table 2: Office Supplies
+          if (tables[1]) {
+            const rows = tables[1].querySelectorAll('tbody tr');
+            // Subtract 1 for the subtotal row
+            if (rows.length > 1) setOfficeSuppliesRowCount(rows.length - 1);
+          }
+          // Table 3: Other Expenses
+          if (tables[2]) {
+            const rows = tables[2].querySelectorAll('tbody tr');
+            // Subtract 1 for the subtotal row
+            if (rows.length > 1) setOtherExpensesRowCount(rows.length - 1);
+          }
+        }
+
+        if (proposal['training-design']?.htmlContent) {
+          tempDiv.innerHTML = proposal['training-design'].htmlContent;
+          const rows = tempDiv.querySelectorAll('table tbody tr');
+          // Subtract 1 for the total hours row
+          if (rows.length > 1) setTrainingDesignRowCount(rows.length - 1);
+        }
+
+        // 2. Wait for React to re-render with the new row counts, then populate values
+        // We use a small timeout to allow the state updates to flush to the DOM
+        timeoutId = window.setTimeout(() => {
+          if (!panelRef.current) return;
+
+          for (const section of proposalSections) {
+            const snapshot = proposal[section.id];
+            const container = panelRef.current.querySelector<HTMLElement>(
+              `[data-section-id="${section.id}"]`,
+            );
+            
+            if (!container || !snapshot) continue;
+
+            // Restore input values
+            if (Array.isArray(snapshot.inputs)) {
+              const liveInputs = container.querySelectorAll<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>('input, textarea, select');
+              snapshot.inputs.forEach((savedInput: any) => {
+                const liveEl = liveInputs[savedInput.index];
+                if (liveEl) {
+                  if (savedInput.type === 'checkbox') {
+                    (liveEl as HTMLInputElement).checked = !!savedInput.checked;
+                  } else {
+                    liveEl.value = savedInput.value ?? '';
+                    // For budget inputs, we need to trigger the calculation logic
+                    // The inputs in budget tables have onChange handlers that update state
+                    if (
+                      section.id === 'budgetary-requirement' || 
+                      (section.id === 'training-design' && savedInput.type === 'number')
+                    ) {
+                      liveEl.dispatchEvent(new Event('input', { bubbles: true }));
+                      // Also dispatch change just in case
+                      liveEl.dispatchEvent(new Event('change', { bubbles: true }));
+                    }
+                  }
+                }
+              });
+            }
+
+            // Restore editable cells
+            if (Array.isArray(snapshot.editableCells)) {
+              const liveCells = container.querySelectorAll<HTMLElement>('[contenteditable="true"]');
+              snapshot.editableCells.forEach((content: string, index: number) => {
+                const liveEl = liveCells[index];
+                if (liveEl) {
+                  liveEl.innerText = content;
+                }
+              });
+            }
+          }
+        }, 50);
+
+      } catch (err) {
+        // ignore hydration errors
+        console.error('Hydration error', err);
       }
-    } catch (err) {
-      // ignore hydration errors
-    }
-  }, [viewProjectData, panelVisible, panelMode, proposalSections]);
+    };
+
+    restore();
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [viewProjectData, panelVisible, panelMode]); // Removed proposalSections dependency to avoid infinite loops
 
   const handleDeleteProject = async (projectId: string) => {
     const confirmed = window.confirm('Are you sure you want to delete this project? This action cannot be undone.');

@@ -89,6 +89,15 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
 
       const res = await fetch(`http://localhost:5000/api/auth/users/${encodeURIComponent(parsed.id)}`);
       if (!res.ok) {
+        // Fallback for administrator to prevent "User not found"
+        if (parsed.role === 'Administrator') {
+          setProfileUsername('admin');
+          setProfileEmail(parsed.email || 'admin@unihub.com');
+          setProfileRoleName('Administrator');
+          setProfileOpen(true);
+          return;
+        }
+
         const data = await res.json().catch(() => ({}));
         setProfileError(data.message || 'Failed to load profile. Please try again.');
         setProfileLoading(false);

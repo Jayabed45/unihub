@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useMemo } from "react";
 import { io, type Socket } from "socket.io-client";
 import { useSearchParams } from "next/navigation";
 
@@ -9,12 +9,29 @@ interface AdminProject {
   name: string;
   description: string;
   status?: "Pending" | "Approved" | "Rejected" | string;
+  activitySchedule?: Array<{
+    activityId?: number;
+    startAt?: string;
+    endAt?: string;
+  }>;
 }
 
 export default function AdminProjectsPage() {
   const [projects, setProjects] = useState<AdminProject[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const [nowMs, setNowMs] = useState(() => Date.now());
+
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      setNowMs(Date.now());
+    }, 60000); // Update every minute
+
+    return () => {
+      window.clearInterval(id);
+    };
+  }, []);
 
   const [viewerMounted, setViewerMounted] = useState(false);
   const [viewerVisible, setViewerVisible] = useState(false);
@@ -386,15 +403,122 @@ export default function AdminProjectsPage() {
     }
   };
 
-  const forApprovalProjects = projects.filter((project) => {
-    const status = project.status || 'Pending';
-    return status === 'Pending';
-  });
+  const { approvalProjects, approvedProjects, completedOrEndedProjects } = useMemo(() => {
+    const now = nowMs;
 
-  const approvedProjects = projects.filter((project) => project.status === 'Approved');
+    const approval: (AdminProject & { derivedStatus: string })[] = [];
+    const approved: (AdminProject & { derivedStatus: string })[] = [];
+    const completedOrEnded: (AdminProject & { derivedStatus: string })[] = [];
 
-  // Exclude rejected projects from display as requested
-  const endedProjects = projects.filter((project) => project.status !== 'Pending' && project.status !== 'Approved' && project.status !== 'Rejected');
+    // Helper to determine derived status
+    const getDerivedStatus = (project: AdminProject) => {
+      const status = project.status || 'Pending';
+      
+      if (status === 'Pending') return 'Pending';
+      if (status === 'Rejected') return 'Rejected';
+
+      // Status is Approved, check for completion
+      const rawSchedule = Array.isArray(project.activitySchedule) ? project.activitySchedule : [];
+      if (rawSchedule.length === 0) return 'Approved';
+
+      let allEnded = true;
+      for (const item of rawSchedule) {
+        const endMs = item.endAt ? new Date(item.endAt).getTime() : NaN;
+        const hasEnd = Number.isFinite(endMs);
+        const isEnded = hasEnd && endMs < now;
+        if (!isEnded) {
+          allEnded = false;
+          break;
+        }
+      }
+
+      return allEnded ? 'Completed' : 'Approved';
+    };
+
+    projects.forEach((project) => {
+       const derived = getDerivedStatus(project);
+       const withDerived = { ...project, derivedStatus: derived };
+       
+       if (derived === 'Pending') {
+          approval.push(withDerived);
+       } else if (derived === 'Approved') { 
+          approved.push(withDerived);
+       } else if (derived === 'Completed') {
+          completedOrEnded.push(withDerived);
+       }
+    });
+
+    return { approvalProjects: approval, approvedProjects: approved, completedOrEndedProjects: completedOrEnded };
+  }, [projects, nowMs]);
+
+  const renderProjectCard = (project: AdminProject & { derivedStatus: string }) => {
+    const status = project.derivedStatus;
+    
+    let statusLabel = status;
+    let statusColor = 'bg-gray-50 text-gray-700 border-gray-200';
+
+    if (status === 'Approved') {
+       statusLabel = 'Approved';
+       statusColor = 'bg-emerald-50 text-emerald-700 border-emerald-200';
+    } else if (status === 'Rejected') {
+        statusLabel = 'Rejected';
+        statusColor = 'bg-red-50 text-red-700 border-red-200';
+     } else if (status === 'Pending') {
+        statusLabel = 'Pending';
+        statusColor = 'bg-amber-50 text-amber-700 border-amber-200';
+     } else if (status === 'Completed') {
+       statusLabel = 'Completed';
+       statusColor = 'bg-blue-50 text-blue-700 border-blue-200';
+    }
+
+    const isHighlighted = project._id === highlightProjectId;
+
+    return (
+      <div
+        key={project._id}
+        className={`flex flex-col rounded-xl border bg-white p-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md ${
+          isHighlighted
+            ? 'border-amber-400 shadow-amber-300 ring-2 ring-amber-300 animate-pulse'
+            : 'border-amber-100'
+        }`}
+      >
+        <div className="space-y-1">
+          <h2 className="text-sm font-semibold text-gray-900 line-clamp-2">{project.name}</h2>
+          <p className="text-xs text-gray-600 line-clamp-3">{project.description}</p>
+        </div>
+        <div className="mt-4 flex items-center justify-between gap-2 text-xs">
+          <span
+            className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide ${statusColor}`}
+          >
+            {statusLabel}
+          </span>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                setBeneficiariesProject(project);
+                setBeneficiariesOpen(true);
+              }}
+              className="rounded-full border border-amber-200 px-3 py-1 text-xs font-semibold text-amber-700 transition hover:bg-amber-50"
+            >
+              Beneficiaries
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setViewerProject(project);
+                setViewerMounted(true);
+                window.setTimeout(() => setViewerVisible(true), 20);
+              }}
+              className="rounded-full border border-amber-200 px-3 py-1 text-xs font-semibold text-amber-700 transition hover:bg-amber-50"
+            >
+              View
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  };
 
   return (
     <div className="space-y-6">
@@ -419,239 +543,74 @@ export default function AdminProjectsPage() {
         </div>
       </header>
 
-      <section className="rounded-2xl border border-amber-100 bg-white/80 p-6">
-        {loading ? (
-          <div className="text-center text-sm text-gray-600">Loading projects…</div>
-        ) : error ? (
-          <div className="text-center text-sm text-red-600">{error}</div>
-        ) : projects.length === 0 ? (
-          <div className="text-center text-sm text-gray-600">
-            No project proposals have been submitted yet.
-          </div>
-        ) : (
-          <div className="space-y-8">
-            {forApprovalProjects.length > 0 && (
-              <div className="space-y-3">
-                <div>
-                  <h2 className="text-sm font-semibold text-gray-900">Projects for approval</h2>
-                  <p className="text-xs text-gray-500">
-                    These proposals are waiting for an admin evaluation and decision.
-                  </p>
-                </div>
-                <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-                  {forApprovalProjects.map((project) => {
-                    const status = project.status || 'Pending';
-                    const statusLabel = 'Pending';
-                    const statusColor =
-                      status === 'Approved'
-                        ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                        : status === 'Rejected'
-                        ? 'bg-red-50 text-red-700 border-red-200'
-                        : 'bg-amber-50 text-amber-700 border-amber-200';
-
-                    const isHighlighted = project._id === highlightProjectId;
-
-                    return (
-                      <div
-                        key={project._id}
-                        className={`flex h-full flex-col rounded-xl border bg-white/80 p-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md ${
-                          isHighlighted
-                            ? 'border-amber-400 shadow-amber-300 ring-2 ring-amber-300 animate-pulse'
-                            : 'border-amber-100'
-                        }`}
-                      >
-                        <div className="flex-1 space-y-1">
-                          <h2 className="text-sm font-semibold text-gray-900 line-clamp-2">{project.name}</h2>
-                          <p className="text-xs text-gray-600 line-clamp-3">{project.description}</p>
-                        </div>
-                        <div className="mt-4 flex items-center justify-between gap-2 text-xs">
-                          <span
-                            className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide ${statusColor}`}
-                          >
-                            {statusLabel}
-                          </span>
-                          <div className="flex items-center gap-2">
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setBeneficiariesProject(project);
-                                setBeneficiariesOpen(true);
-                              }}
-                              className="rounded-full border border-amber-200 px-3 py-1 text-xs font-semibold text-amber-700 transition hover:bg-amber-50"
-                            >
-                              Beneficiaries
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setViewerProject(project);
-                                setViewerMounted(true);
-                                window.setTimeout(() => setViewerVisible(true), 20);
-                              }}
-                              className="rounded-full border border-amber-200 px-3 py-1 text-xs font-semibold text-amber-700 transition hover:bg-amber-50"
-                            >
-                              View
-                            </button>
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
-
-            {approvedProjects.length > 0 && (
-              <div className="space-y-3">
-                <div>
-                  <h2 className="text-sm font-semibold text-gray-900">Approved projects</h2>
-                  <p className="text-xs text-gray-500">
-                    Proposals that have been evaluated and marked as approved.
-                  </p>
-                </div>
-                <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-                  {approvedProjects.map((project) => {
-                    const status = project.status || 'Approved';
-                    const statusLabel = 'Approved';
-                    const statusColor =
-                      status === 'Approved'
-                        ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                        : status === 'Rejected'
-                        ? 'bg-red-50 text-red-700 border-red-200'
-                        : 'bg-amber-50 text-amber-700 border-amber-200';
-
-                    const isHighlighted = project._id === highlightProjectId;
-
-                    return (
-                      <div
-                        key={project._id}
-                        className={`flex h-full flex-col rounded-xl border bg-white/80 p-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md ${
-                          isHighlighted
-                            ? 'border-emerald-400 shadow-emerald-300 ring-2 ring-emerald-300'
-                            : 'border-amber-100'
-                        }`}
-                      >
-                        <div className="flex-1 space-y-1">
-                          <h2 className="text-sm font-semibold text-gray-900 line-clamp-2">{project.name}</h2>
-                          <p className="text-xs text-gray-600 line-clamp-3">{project.description}</p>
-                        </div>
-                        <div className="mt-4 flex items-center justify-between gap-2 text-xs">
-                          <span
-                            className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide ${statusColor}`}
-                          >
-                            {statusLabel}
-                          </span>
-                          <div className="flex items-center gap-2">
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setBeneficiariesProject(project);
-                                setBeneficiariesOpen(true);
-                              }}
-                              className="rounded-full border border-amber-200 px-3 py-1 text-xs font-semibold text-amber-700 transition hover:bg-amber-50"
-                            >
-                              Beneficiaries
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setViewerProject(project);
-                                setViewerMounted(true);
-                                window.setTimeout(() => setViewerVisible(true), 20);
-                              }}
-                              className="rounded-full border border-amber-200 px-3 py-1 text-xs font-semibold text-amber-700 transition hover:bg-amber-50"
-                            >
-                              View
-                            </button>
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
-
-            {endedProjects.length > 0 && (
-              <div className="space-y-3">
-                <div>
-                  <h2 className="text-sm font-semibold text-gray-900">Ended projects</h2>
-                  <p className="text-xs text-gray-500">
-                    Proposals that were marked as rejected or otherwise ended.
-                  </p>
-                </div>
-                <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-                  {endedProjects.map((project) => {
-                    const status = project.status || 'Rejected';
-                    const statusLabel = 'Ended';
-                    const statusColor =
-                      status === 'Approved'
-                        ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                        : status === 'Rejected'
-                        ? 'bg-red-50 text-red-700 border-red-200'
-                        : 'bg-amber-50 text-amber-700 border-amber-200';
-
-                    const isHighlighted = project._id === highlightProjectId;
-
-                    return (
-                      <div
-                        key={project._id}
-                        className={`flex h-full flex-col rounded-xl border bg-white/80 p-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md ${
-                          isHighlighted
-                            ? 'border-red-400 shadow-red-300 ring-2 ring-red-300'
-                            : 'border-amber-100'
-                        }`}
-                      >
-                        <div className="flex-1 space-y-1">
-                          <h2 className="text-sm font-semibold text-gray-900 line-clamp-2">{project.name}</h2>
-                          <p className="text-xs text-gray-600 line-clamp-3">{project.description}</p>
-                        </div>
-                        <div className="mt-4 flex items-center justify-between gap-2 text-xs">
-                          <span
-                            className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide ${statusColor}`}
-                          >
-                            {statusLabel}
-                          </span>
-                          <div className="flex items-center gap-2">
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setBeneficiariesProject(project);
-                                setBeneficiariesOpen(true);
-                              }}
-                              className="rounded-full border border-amber-200 px-3 py-1 text-xs font-semibold text-amber-700 transition hover:bg-amber-50"
-                            >
-                              Beneficiaries
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setViewerProject(project);
-                                setViewerMounted(true);
-                                window.setTimeout(() => setViewerVisible(true), 20);
-                              }}
-                              className="rounded-full border border-amber-200 px-3 py-1 text-xs font-semibold text-amber-700 transition hover:bg-amber-50"
-                            >
-                              View
-                            </button>
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-        {forApprovalProjects.length === 0 &&
-          approvedProjects.length === 0 &&
-          endedProjects.length === 0 && (
-            <div className="text-center text-sm text-gray-600">
-              No project proposals have been submitted yet.
+      {loading ? (
+        <div className="text-center text-sm text-gray-600 py-10">Loading projects…</div>
+      ) : error ? (
+        <div className="text-center text-sm text-red-600 py-10">{error}</div>
+      ) : projects.length === 0 ? (
+        <div className="text-center text-sm text-gray-600 py-10">
+          No project proposals have been submitted yet.
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+          {/* Column 1: For approval */}
+          <div className="flex flex-col gap-4">
+            <div className="flex items-center justify-between rounded-lg border border-amber-100 bg-amber-50/50 px-4 py-3">
+              <h3 className="text-sm font-semibold text-gray-900">For approval</h3>
+              <span className="rounded-full bg-white px-2 py-0.5 text-xs font-bold text-amber-600 shadow-sm border border-amber-100">
+                {approvalProjects.length}
+              </span>
             </div>
-          )}
-      </section>
+            <div className="flex flex-col gap-3">
+              {approvalProjects.length === 0 ? (
+                <div className="rounded-xl border border-dashed border-gray-200 p-6 text-center text-xs text-gray-500">
+                  No pending projects
+                </div>
+              ) : (
+                approvalProjects.map(renderProjectCard)
+              )}
+            </div>
+          </div>
+
+          {/* Column 2: Approved */}
+          <div className="flex flex-col gap-4">
+            <div className="flex items-center justify-between rounded-lg border border-emerald-100 bg-emerald-50/50 px-4 py-3">
+              <h3 className="text-sm font-semibold text-gray-900">Approved</h3>
+              <span className="rounded-full bg-white px-2 py-0.5 text-xs font-bold text-emerald-600 shadow-sm border border-emerald-100">
+                {approvedProjects.length}
+              </span>
+            </div>
+            <div className="flex flex-col gap-3">
+              {approvedProjects.length === 0 ? (
+                <div className="rounded-xl border border-dashed border-gray-200 p-6 text-center text-xs text-gray-500">
+                  No approved projects
+                </div>
+              ) : (
+                approvedProjects.map(renderProjectCard)
+              )}
+            </div>
+          </div>
+
+          {/* Column 3: Completed / Ended */}
+          <div className="flex flex-col gap-4">
+            <div className="flex items-center justify-between rounded-lg border border-blue-100 bg-blue-50/50 px-4 py-3">
+              <h3 className="text-sm font-semibold text-gray-900">Completed / Ended</h3>
+              <span className="rounded-full bg-white px-2 py-0.5 text-xs font-bold text-blue-600 shadow-sm border border-blue-100">
+                {completedOrEndedProjects.length}
+              </span>
+            </div>
+            <div className="flex flex-col gap-3">
+              {completedOrEndedProjects.length === 0 ? (
+                <div className="rounded-xl border border-dashed border-gray-200 p-6 text-center text-xs text-gray-500">
+                  No completed projects
+                </div>
+              ) : (
+                completedOrEndedProjects.map(renderProjectCard)
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {exportPreviewOpen && exportPreviewKind && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4" role="dialog" aria-modal="true">

@@ -33,6 +33,7 @@ interface ApprovedParticipantRow {
   fullName?: string;
   projectId: string;
   projectName: string;
+  projectStatus: string;
   activities: ApprovedParticipantActivity[];
 }
 
@@ -45,7 +46,7 @@ export default function ProjectLeaderParticipantsPage() {
   const [approvedRows, setApprovedRows] = useState<ApprovedParticipantRow[]>([]);
   const [approvedLoading, setApprovedLoading] = useState(false);
   const [approvedError, setApprovedError] = useState<string | null>(null);
-  const [statusFilter, setStatusFilter] = useState<'all' | 'pending' | 'approved'>('all');
+  const [statusFilter, setStatusFilter] = useState<'approved' | 'completed'>('approved');
   const [projectFilter, setProjectFilter] = useState<'all' | string>('all');
   const [activityFilter, setActivityFilter] = useState<'all' | string>('all');
   const [activitiesModalOpen, setActivitiesModalOpen] = useState(false);
@@ -333,7 +334,7 @@ export default function ProjectLeaderParticipantsPage() {
       }
 
       const projects = (await resProjects.json()) as Array<{ _id: string; name?: string; status?: string }>;
-      const validProjects = projects.filter((p) => p.status !== 'Rejected');
+      const validProjects = projects.filter((p) => p.status === 'Approved' || p.status === 'Completed');
 
       if (!validProjects.length) {
         setApprovedRows([]);
@@ -343,8 +344,10 @@ export default function ProjectLeaderParticipantsPage() {
 
       const projectIdSet = new Set(validProjects.map((p) => p._id));
       const projectNameById: Record<string, string> = {};
+      const projectStatusById: Record<string, string> = {};
       validProjects.forEach((p) => {
         projectNameById[p._id] = p.name || 'Untitled project';
+        projectStatusById[p._id] = p.status || 'Approved';
       });
 
       setLeaderProjects(validProjects);
@@ -444,6 +447,7 @@ export default function ProjectLeaderParticipantsPage() {
             fullName: beneficiary.fullName,
             projectId,
             projectName: projectNameById[projectId] ?? projectId,
+            projectStatus: projectStatusById[projectId] ?? 'Approved',
             activities,
           });
         });
@@ -610,8 +614,16 @@ export default function ProjectLeaderParticipantsPage() {
   const [exportPreviewOpen, setExportPreviewOpen] = useState(false);
 
   const filteredRows = combinedRows.filter((row) => {
-    if (statusFilter === 'pending' && row.kind !== 'pending') return false;
-    if (statusFilter === 'approved' && row.kind !== 'approved') return false;
+    if (statusFilter === 'approved') {
+      // Show pending requests AND approved participants in Approved projects
+      if (row.kind === 'pending') return true; 
+      if (row.kind === 'approved' && row.approvedSource.projectStatus !== 'Approved') return false;
+    }
+    if (statusFilter === 'completed') {
+      // Show only participants in Completed projects
+      if (row.kind === 'pending') return false;
+      if (row.kind === 'approved' && row.approvedSource.projectStatus !== 'Completed') return false;
+    }
 
     if (projectFilter !== 'all' && row.projectId && row.projectId !== projectFilter) return false;
     if (activityFilter !== 'all') {
@@ -932,30 +944,21 @@ export default function ProjectLeaderParticipantsPage() {
               <div className="inline-flex overflow-hidden rounded-full border border-yellow-200 bg-yellow-50 text-[11px] font-medium text-gray-700">
                 <button
                   type="button"
-                  onClick={() => setStatusFilter('all')}
-                  className={`px-3 py-1 transition ${
-                    statusFilter === 'all' ? 'bg-yellow-500 text-white' : 'hover:bg-yellow-100'
-                  }`}
-                >
-                  All
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setStatusFilter('pending')}
-                  className={`px-3 py-1 transition ${
-                    statusFilter === 'pending' ? 'bg-yellow-500 text-white' : 'hover:bg-yellow-100'
-                  }`}
-                >
-                  Pending
-                </button>
-                <button
-                  type="button"
                   onClick={() => setStatusFilter('approved')}
                   className={`px-3 py-1 transition ${
                     statusFilter === 'approved' ? 'bg-yellow-500 text-white' : 'hover:bg-yellow-100'
                   }`}
                 >
                   Approved
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setStatusFilter('completed')}
+                  className={`px-3 py-1 transition ${
+                    statusFilter === 'completed' ? 'bg-yellow-500 text-white' : 'hover:bg-yellow-100'
+                  }`}
+                >
+                  Completed
                 </button>
               </div>
             </div>
