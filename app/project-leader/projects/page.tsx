@@ -4,7 +4,7 @@
 import { useMemo, useState, useEffect, useRef, Fragment } from 'react';
 import { usePathname, useSearchParams } from 'next/navigation';
 import { io, type Socket } from 'socket.io-client';
-import { PlusCircle, Filter, CalendarDays, CheckCircle2 } from 'lucide-react';
+import { PlusCircle, Filter, CalendarDays, CheckCircle2, Eye, FileText, MoreVertical, Trash2 } from 'lucide-react';
 
 import { projectLeaderNavigation } from '../navigation';
 
@@ -466,7 +466,7 @@ export default function ProjectLeaderProjectsPage() {
               </span>
             )}
           </div>
-          <div className="relative flex items-center gap-2">
+          <div className="relative flex items-center gap-1">
             {status === 'Approved' && (
               <>
                 <button
@@ -475,9 +475,10 @@ export default function ProjectLeaderProjectsPage() {
                     event.stopPropagation();
                     openActivitiesModal(project);
                   }}
-                  className="rounded-full border border-yellow-200 px-3 py-1 font-semibold text-yellow-700 transition hover:bg-yellow-50"
+                  title="View activities"
+                  className="rounded-full border border-yellow-200 p-1.5 text-yellow-700 transition hover:bg-yellow-50 hover:text-yellow-800"
                 >
-                  View activities
+                  <CalendarDays className="h-4 w-4" />
                 </button>
                 <button
                   type="button"
@@ -485,9 +486,10 @@ export default function ProjectLeaderProjectsPage() {
                     event.stopPropagation();
                     openTerminalReportFromCard(project);
                   }}
-                  className="rounded-full border border-yellow-200 px-3 py-1 font-semibold text-yellow-700 transition hover:bg-yellow-50"
+                  title="Terminal report"
+                  className="rounded-full border border-yellow-200 p-1.5 text-yellow-700 transition hover:bg-yellow-50 hover:text-yellow-800"
                 >
-                  Terminal report
+                  <FileText className="h-4 w-4" />
                 </button>
               </>
             )}
@@ -497,12 +499,12 @@ export default function ProjectLeaderProjectsPage() {
                 event.stopPropagation();
                 setOptionsOpenProjectId((current) => (current === project._id ? null : project._id));
               }}
-              className="rounded-full border border-yellow-200 px-3 py-1 font-semibold text-yellow-700 transition hover:bg-yellow-50"
+              className="rounded-full border border-yellow-200 p-1.5 text-yellow-700 transition hover:bg-yellow-50 hover:text-yellow-800"
             >
-              Options
+              <MoreVertical className="h-4 w-4" />
             </button>
             {optionsOpenProjectId === project._id && (
-              <div className="absolute right-0 z-10 mt-1 w-44 rounded-lg border border-yellow-100 bg-white py-1 text-left text-[11px] shadow-lg">
+              <div className="absolute right-0 top-full z-10 mt-1 w-44 rounded-lg border border-yellow-100 bg-white py-1 text-left text-[11px] shadow-lg">
                 {hasEvaluation && (
                   <button
                     type="button"
@@ -511,8 +513,9 @@ export default function ProjectLeaderProjectsPage() {
                       setEvaluationViewProject(project);
                       setOptionsOpenProjectId(null);
                     }}
-                    className="block w-full px-3 py-1.5 text-left text-emerald-700 hover:bg-emerald-50"
+                    className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-emerald-700 hover:bg-emerald-50"
                   >
+                    <Eye className="h-3.5 w-3.5" />
                     View evaluation
                   </button>
                 )}
@@ -522,9 +525,10 @@ export default function ProjectLeaderProjectsPage() {
                     event.stopPropagation();
                     handleDeleteProject(project._id);
                   }}
-                  className="block w-full px-3 py-1.5 text-left text-red-600 hover:bg-red-50"
+                  className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-red-600 hover:bg-red-50"
                 >
-                  Delete
+                  <Trash2 className="h-3.5 w-3.5" />
+                  Delete project
                 </button>
                 <button
                   type="button"
