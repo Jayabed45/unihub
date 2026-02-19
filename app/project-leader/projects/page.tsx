@@ -2566,6 +2566,101 @@ export default function ProjectLeaderProjectsPage() {
     };
   }, [viewProjectData, panelVisible, panelMode]); // Removed proposalSections dependency to avoid infinite loops
 
+  // Autofill and Prefill Logic
+  useEffect(() => {
+    if (!panelRef.current) return;
+
+    const trainingSection = panelRef.current.querySelector<HTMLElement>('[data-section-id="training-design"]');
+    if (!trainingSection) return;
+
+    // 1. Autofill Resource Person
+    const tbody = trainingSection.querySelector('tbody');
+    if (!tbody) return;
+
+    const handleInput = (e: Event) => {
+      const target = e.target as HTMLElement;
+      if (!target.isContentEditable) return;
+
+      const row = target.closest('tr');
+      if (!row) return;
+      const parentBody = row.closest('tbody');
+      if (parentBody !== tbody) return;
+
+      const rows = Array.from(parentBody.children) as HTMLTableRowElement[];
+      const rowIndex = rows.indexOf(row);
+      const cellIndex = Array.from(row.children).indexOf(target);
+
+      // Only act if it's the Resource Person column (index 2)
+      if (cellIndex !== 2) return;
+
+      const value = target.innerText;
+
+      // Propagate to subsequent rows (excluding the last "Total" row)
+      for (let i = rowIndex + 1; i < rows.length - 1; i++) {
+        const nextRow = rows[i];
+        const nextTarget = nextRow.children[2] as HTMLElement;
+        // Autofill only if the next cell is empty
+        if (nextTarget && !nextTarget.innerText.trim()) {
+          nextTarget.innerText = value;
+        }
+      }
+    };
+
+    tbody.addEventListener('input', handleInput);
+    return () => {
+      tbody.removeEventListener('input', handleInput);
+    };
+  }, [panelMounted, trainingDesignRowCount]); // Re-attach if rows change
+
+  // 2. Prefill Topics and Resource Person from Implementation Plan
+  useEffect(() => {
+    if (activeSectionId !== 'training-design' || !panelRef.current) return;
+
+    const root = panelRef.current;
+    const impSection = root.querySelector<HTMLElement>('[data-section-id="implementation-plan"]');
+    const trainSection = root.querySelector<HTMLElement>('[data-section-id="training-design"]');
+
+    if (!impSection || !trainSection) return;
+
+    // Get activities and persons from Implementation Plan
+    const items: Array<{ activity: string; person: string }> = [];
+    const impRows = impSection.querySelectorAll('table tbody tr');
+    impRows.forEach((row) => {
+      const cells = row.querySelectorAll('td');
+      // Column 1 is Activities, Column 2 is Person Responsible
+      if (cells.length > 2) {
+        const activity = cells[1].innerText.trim();
+        const person = cells[2].innerText.trim();
+        if (activity || person) {
+          items.push({ activity, person });
+        }
+      }
+    });
+
+    if (items.length === 0) return;
+
+    // Fill Training Design Topics and Resource Person
+    const trainRows = trainSection.querySelectorAll('table tbody tr');
+    // Exclude the last row (Total Hours)
+    const availableRows = Math.max(0, trainRows.length - 1);
+
+    items.forEach((item, i) => {
+      if (i < availableRows) {
+        const row = trainRows[i];
+        const topicCell = row.children[0] as HTMLElement;
+        const personCell = row.children[2] as HTMLElement;
+
+        // Only prefill if empty
+        if (topicCell && !topicCell.innerText.trim() && item.activity) {
+          topicCell.innerText = item.activity;
+        }
+        if (personCell && !personCell.innerText.trim() && item.person) {
+          personCell.innerText = item.person;
+        }
+      }
+    });
+  }, [activeSectionId, trainingDesignRowCount]);
+
   const handleDeleteProject = async (projectId: string) => {
     const confirmed = window.confirm('Are you sure you want to delete this project? This action cannot be undone.');
     if (!confirmed) return;

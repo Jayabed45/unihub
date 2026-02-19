@@ -49,7 +49,6 @@ export default function AdminProjectsPage() {
   >([]);
   const [beneficiariesLoading, setBeneficiariesLoading] = useState(false);
   const [beneficiariesError, setBeneficiariesError] = useState<string | null>(null);
-  const [beneficiariesUpdatingEmail, setBeneficiariesUpdatingEmail] = useState<string | null>(null);
 
   const [evaluationTitle, setEvaluationTitle] = useState('');
   const [evaluationCampus, setEvaluationCampus] = useState('');
@@ -290,37 +289,6 @@ export default function AdminProjectsPage() {
     }
   };
 
-  const handleRemoveBeneficiary = async (email: string) => {
-    if (!beneficiariesProject || !email) return;
-
-    setBeneficiariesError(null);
-    setBeneficiariesUpdatingEmail(email);
-
-    try {
-      const res = await fetch(
-        `http://localhost:5000/api/projects/${beneficiariesProject._id}/beneficiaries`,
-        {
-          method: 'PATCH',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({ email, status: 'removed' }),
-        },
-      );
-
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error((data as any).message || 'Failed to update beneficiary');
-      }
-
-      setBeneficiaries((prev) => prev.filter((row) => row.email !== email));
-    } catch (err: any) {
-      setBeneficiariesError(err.message || 'Failed to update beneficiary');
-    } finally {
-      setBeneficiariesUpdatingEmail(null);
-    }
-  };
-
   useEffect(() => {
     // Ensure evaluation arrays always match criteria length
     if (evaluationRatings.length !== evaluationCriteria.length) {
@@ -516,7 +484,7 @@ export default function AdminProjectsPage() {
             </button>
           </div>
         </div>
-      </div>
+      </div>  
     );
   };
 
@@ -1178,9 +1146,6 @@ export default function AdminProjectsPage() {
                         <th className="border border-amber-100 px-3 py-2 text-left font-semibold text-gray-700">
                           Last updated
                         </th>
-                        <th className="border border-amber-100 px-3 py-2 text-left font-semibold text-gray-700">
-                          Actions
-                        </th>
                       </tr>
                     </thead>
                     <tbody>
@@ -1200,16 +1165,6 @@ export default function AdminProjectsPage() {
                             </td>
                             <td className="border border-amber-100 px-3 py-2 text-[11px] sm:text-xs whitespace-nowrap">
                               {row.updatedAt ? new Date(row.updatedAt).toLocaleString('en-PH') : ''}
-                            </td>
-                            <td className="border border-amber-100 px-3 py-2 text-[11px] sm:text-xs">
-                              <button
-                                type="button"
-                                onClick={() => handleRemoveBeneficiary(row.email)}
-                                disabled={beneficiariesUpdatingEmail === row.email}
-                                className="rounded-full border border-red-200 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-red-600 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-60"
-                              >
-                                {beneficiariesUpdatingEmail === row.email ? 'Removing…' : 'Remove'}
-                              </button>
                             </td>
                           </tr>
                         );
