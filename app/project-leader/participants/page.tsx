@@ -62,9 +62,9 @@ export default function ProjectLeaderParticipantsPage() {
     | null
   >(null);
   const [leaderProjects, setLeaderProjects] = useState<Array<{ _id: string; name?: string }>>([]);
-  const [selectedEvalProjectId, setSelectedEvalProjectId] = useState<string>('');
   const [evalSummaries, setEvalSummaries] = useState<
     Array<{
+      projectId: string;
       activityId: number;
       activityTitle: string;
       totalResponses: number;
@@ -351,9 +351,7 @@ export default function ProjectLeaderParticipantsPage() {
       });
 
       setLeaderProjects(validProjects);
-      if (!selectedEvalProjectId) {
-        setSelectedEvalProjectId(validProjects[0]._id);
-      }
+
 
       const beneficiariesByProject: Record<string, Array<{ email: string; fullName?: string }>> = {};
       const uniqueEmails = new Set<string>();
@@ -473,7 +471,7 @@ export default function ProjectLeaderParticipantsPage() {
 
   useEffect(() => {
     const run = async () => {
-      if (!selectedEvalProjectId) {
+      if (leaderProjects.length === 0) {
         setEvalSummaries([]);
         setEvalSummariesError(null);
         return;
@@ -481,23 +479,42 @@ export default function ProjectLeaderParticipantsPage() {
 
       setEvalSummariesLoading(true);
       setEvalSummariesError(null);
-      try {
-        const res = await fetch(
-          `http://localhost:5000/api/projects/${encodeURIComponent(selectedEvalProjectId)}/evaluations-summary`,
-        );
-        if (!res.ok) {
-          const data = await res.json().catch(() => ({}));
-          throw new Error((data as any).message || 'Failed to load evaluation summaries');
-        }
 
-        const data = (await res.json()) as Array<{
-          activityId: number;
-          activityTitle: string;
-          totalResponses: number;
-          overallAverage: number;
-          perQuestionAverages: Record<string, number>;
-        }>;
-        setEvalSummaries(Array.isArray(data) ? data : []);
+      try {
+        // Determine which projects to fetch based on projectFilter
+        const projectsToFetch = projectFilter === 'all' 
+          ? leaderProjects 
+          : leaderProjects.filter(p => p._id === projectFilter);
+
+        // Fetch summaries for each project in parallel
+        const promises = projectsToFetch.map(async (project) => {
+          try {
+            const res = await fetch(
+              `http://localhost:5000/api/projects/${encodeURIComponent(project._id)}/evaluations-summary`
+            );
+            if (!res.ok) return [];
+            const data = await res.json();
+            if (!Array.isArray(data)) return [];
+            
+            // Inject projectId into each summary item
+            return data.map((item: any) => ({
+              ...item,
+              projectId: project._id,
+            }));
+          } catch {
+            return [];
+          }
+        });
+
+        const results = await Promise.all(promises);
+        const allSummaries = results.flat();
+
+        // Filter by activity if needed
+        const filtered = activityFilter === 'all'
+          ? allSummaries
+          : allSummaries.filter((s) => s.activityTitle === activityFilter);
+
+        setEvalSummaries(filtered);
       } catch (err: any) {
         setEvalSummariesError(err.message || 'Failed to load evaluation summaries');
         setEvalSummaries([]);
@@ -507,7 +524,7 @@ export default function ProjectLeaderParticipantsPage() {
     };
 
     run();
-  }, [selectedEvalProjectId]);
+  }, [projectFilter, activityFilter, leaderProjects]);
 
   useEffect(() => {
     const socket = io('http://localhost:5000');
@@ -1278,26 +1295,7 @@ export default function ProjectLeaderParticipantsPage() {
             </p>
           </div>
           <div className="flex flex-col gap-2 text-[11px] sm:flex-row sm:items-center sm:gap-3">
-            <div className="flex items-center gap-2">
-              <span className="font-medium text-gray-700">Project:</span>
-              <select
-                className="rounded-full border border-yellow-200 bg-white px-3 py-1 text-[11px] text-gray-800 focus:border-yellow-400 focus:outline-none focus:ring-1 focus:ring-yellow-300"
-                value={selectedEvalProjectId}
-                onChange={(event) => setSelectedEvalProjectId(event.target.value)}
-              >
-                {leaderProjects.length === 0 ? (
-                  <option value="">No projects available</option>
-                ) : (
-                  <>
-                    {leaderProjects.map((project) => (
-                      <option key={project._id} value={project._id}>
-                        {project.name || 'Untitled project'}
-                      </option>
-                    ))}
-                  </>
-                )}
-              </select>
-            </div>
+            {/* Filter controls removed - now uses main page filters */}
           </div>
         </div>
 
@@ -1305,13 +1303,9 @@ export default function ProjectLeaderParticipantsPage() {
           <div className="text-center text-sm text-gray-600">Loading evaluation summaries...</div>
         ) : evalSummariesError ? (
           <div className="text-center text-sm text-red-600">{evalSummariesError}</div>
-        ) : !selectedEvalProjectId ? (
-          <div className="text-center text-sm text-gray-600">
-            Select a project to view its activity evaluation summaries.
-          </div>
         ) : evalSummaries.length === 0 ? (
           <div className="text-center text-sm text-gray-600">
-            No evaluation responses yet for this project's activities.
+            No evaluation responses found matching current filters.
           </div>
         ) : (
           <div className="overflow-x-auto rounded-xl border border-yellow-100 bg-yellow-50/40">
@@ -1337,7 +1331,7 @@ export default function ProjectLeaderParticipantsPage() {
                         <button
                           type="button"
                           onClick={() =>
-                            handleOpenEvaluationDetail(selectedEvalProjectId, row.activityId, row.activityTitle)
+                            handleOpenEvaluationDetail(row.projectId, row.activityId, row.activityTitle)
                           }
                           className="rounded-full border border-yellow-200 px-3 py-1 text-[11px] font-semibold text-yellow-700 hover:bg-yellow-50"
                         >
@@ -1346,7 +1340,7 @@ export default function ProjectLeaderParticipantsPage() {
                         <button
                           type="button"
                           onClick={() =>
-                            handleExportEvaluationCsv(selectedEvalProjectId, row.activityId, row.activityTitle)
+                            handleExportEvaluationCsv(row.projectId, row.activityId, row.activityTitle)
                           }
                           className="rounded-full border border-yellow-200 px-3 py-1 text-[11px] font-semibold text-yellow-700 hover:bg-yellow-50"
                         >
