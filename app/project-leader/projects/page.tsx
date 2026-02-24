@@ -555,6 +555,106 @@ export default function ProjectLeaderProjectsPage() {
     return Number.isNaN(parsed) ? 0 : parsed;
   };
 
+  const parseQuantity = (rawValue: string): number => {
+    if (!rawValue) return 0;
+    const trimmed = rawValue.trim();
+    
+    // Handle fractions like "1/2", "1 / 2"
+    if (trimmed.includes('/')) {
+      const parts = trimmed.split('/');
+      if (parts.length === 2) {
+        const num = parseFloat(parts[0]);
+        const den = parseFloat(parts[1]);
+        if (!Number.isNaN(num) && !Number.isNaN(den) && den !== 0) {
+          return num / den;
+        }
+      }
+    }
+    
+    return parseBudgetNumber(trimmed);
+  };
+
+  const handleNumericKeyDown = (e: React.KeyboardEvent, allowFraction: boolean) => {
+    // Allow navigation and control keys
+    if (
+      e.key === 'Backspace' ||
+      e.key === 'Delete' ||
+      e.key === 'Tab' ||
+      e.key === 'ArrowLeft' ||
+      e.key === 'ArrowRight' ||
+      e.key === 'ArrowUp' ||
+      e.key === 'ArrowDown' ||
+      e.key === 'Enter' ||
+      e.key === 'Home' ||
+      e.key === 'End' ||
+      e.metaKey ||
+      e.ctrlKey ||
+      e.altKey
+    ) {
+      return;
+    }
+
+    // Allow numbers
+    if (/^[0-9]$/.test(e.key)) {
+      return;
+    }
+
+    // Allow decimal point
+    if (e.key === '.') {
+      return;
+    }
+
+    // Allow fraction slash if permitted
+    if (allowFraction && e.key === '/') {
+      return;
+    }
+
+    // Block everything else
+    e.preventDefault();
+  };
+
+  const handleBudgetAutoCalculate = (
+    index: number,
+    type: 'training' | 'office' | 'other',
+    e: React.FormEvent<HTMLTableCellElement>
+  ) => {
+    const row = e.currentTarget.parentElement as HTMLTableRowElement;
+    if (!row) return;
+
+    // Col 1: Quantity, Col 3: Unit Cost
+    const qtyCell = row.children[1] as HTMLElement;
+    const costCell = row.children[3] as HTMLElement;
+    const totalInput = row.children[4]?.querySelector('input') as HTMLInputElement;
+
+    const qtyText = qtyCell?.innerText || '';
+    const costText = costCell?.innerText || '';
+
+    const qty = parseQuantity(qtyText);
+    const cost = parseBudgetNumber(costText);
+    const total = qty * cost;
+
+    // Update state for subtotal calculation
+    if (type === 'training') {
+      setTrainingExpensesTotals((prev) => ({ ...prev, [index]: total }));
+    } else if (type === 'office') {
+      setOfficeSuppliesTotals((prev) => ({ ...prev, [index]: total }));
+    } else if (type === 'other') {
+      setOtherExpensesTotals((prev) => ({ ...prev, [index]: total }));
+    }
+
+    // Update the input display immediately
+    if (totalInput) {
+      const formatted = total > 0
+        ? total.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+        : '';
+      
+      // Only update if the value is different to avoid cursor jumping if we were editing the total directly (though here we are editing qty/cost)
+      if (totalInput.value !== formatted) {
+        totalInput.value = formatted;
+      }
+    }
+  };
+
   const toDateTimeLocalValue = (value?: string | null): string => {
     if (!value) return '';
     const d = new Date(value);
@@ -800,17 +900,29 @@ export default function ProjectLeaderProjectsPage() {
               <div className="grid items-start gap-3 md:grid-cols-[240px_16px_1fr]">
                 <span className="font-semibold text-gray-900">No. of Training Hours</span>
                 <span className="font-semibold text-gray-500">:</span>
-                <input className={inputClassName} placeholder="e.g., 48 hours" />
+                <input
+                  className={inputClassName}
+                  placeholder="e.g., 48 hours"
+                  onKeyDown={(e) => handleNumericKeyDown(e, true)}
+                />
               </div>
               <div className="grid items-start gap-3 md:grid-cols-[240px_16px_1fr]">
                 <span className="font-semibold text-gray-900">No. of Beneficiaries</span>
                 <span className="font-semibold text-gray-500">:</span>
-                <input className={inputClassName} placeholder="e.g., 20 homeowners (11 Female / 9 Male)" />
+                <input
+                  className={inputClassName}
+                  placeholder="e.g., 20 homeowners (11 Female / 9 Male)"
+                  onKeyDown={(e) => handleNumericKeyDown(e, true)}
+                />
               </div>
               <div className="grid items-start gap-3 md:grid-cols-[240px_16px_1fr]">
                 <span className="font-semibold text-gray-900">Total Project Cost</span>
                 <span className="font-semibold text-gray-500">:</span>
-                <input className={inputClassName} placeholder="e.g., ₱93,500.00" />
+                <input
+                  className={inputClassName}
+                  placeholder="e.g., ₱93,500.00"
+                  onKeyDown={(e) => handleNumericKeyDown(e, false)}
+                />
               </div>
               <div className="grid items-start gap-3 md:grid-cols-[240px_16px_1fr]">
                 <span className="font-semibold text-gray-900">Implementing Curricular Program/s</span>
@@ -907,8 +1019,16 @@ export default function ProjectLeaderProjectsPage() {
                         {Array.from({ length: fgdRowCount }).map((_, index) => (
                           <tr key={`rationale-fgd-row-${index}`}>
                             <td {...editableCellProps} className={tableCellClassName}></td>
-                            <td {...editableCellProps} className={`${tableCellClassName} text-center`}></td>
-                            <td {...editableCellProps} className={`${tableCellClassName} text-center`}></td>
+                            <td
+                              {...editableCellProps}
+                              className={`${tableCellClassName} text-center`}
+                              onKeyDown={(e) => handleNumericKeyDown(e, false)}
+                            ></td>
+                            <td
+                              {...editableCellProps}
+                              className={`${tableCellClassName} text-center`}
+                              onKeyDown={(e) => handleNumericKeyDown(e, false)}
+                            ></td>
                           </tr>
                         ))}
                       </tbody>
@@ -1297,9 +1417,19 @@ export default function ProjectLeaderProjectsPage() {
                       {Array.from({ length: trainingExpensesRowCount }).map((_, index) => (
                         <tr key={`training-row-${index}`}>
                           <td {...editableCellProps} className={tableCellClassName}></td>
-                          <td {...editableCellProps} className={`${tableCellClassName} text-center`}></td>
+                          <td
+                            {...editableCellProps}
+                            className={`${tableCellClassName} text-center`}
+                            onInput={(e) => handleBudgetAutoCalculate(index, 'training', e)}
+                            onKeyDown={(e) => handleNumericKeyDown(e, true)}
+                          ></td>
                           <td {...editableCellProps} className={tableCellClassName}></td>
-                          <td {...editableCellProps} className={`${tableCellClassName} text-right`}></td>
+                          <td
+                            {...editableCellProps}
+                            className={`${tableCellClassName} text-right`}
+                            onInput={(e) => handleBudgetAutoCalculate(index, 'training', e)}
+                            onKeyDown={(e) => handleNumericKeyDown(e, false)}
+                          ></td>
                           <td className={`${tableCellClassName} text-right`}>
                             <input
                               type="text"
@@ -1370,9 +1500,19 @@ export default function ProjectLeaderProjectsPage() {
                       {Array.from({ length: officeSuppliesRowCount }).map((_, index) => (
                         <tr key={`office-row-${index}`}>
                           <td {...editableCellProps} className={tableCellClassName}></td>
-                          <td {...editableCellProps} className={`${tableCellClassName} text-center`}></td>
+                          <td
+                            {...editableCellProps}
+                            className={`${tableCellClassName} text-center`}
+                            onInput={(e) => handleBudgetAutoCalculate(index, 'office', e)}
+                            onKeyDown={(e) => handleNumericKeyDown(e, true)}
+                          ></td>
                           <td {...editableCellProps} className={tableCellClassName}></td>
-                          <td {...editableCellProps} className={`${tableCellClassName} text-right`}></td>
+                          <td
+                            {...editableCellProps}
+                            className={`${tableCellClassName} text-right`}
+                            onInput={(e) => handleBudgetAutoCalculate(index, 'office', e)}
+                            onKeyDown={(e) => handleNumericKeyDown(e, false)}
+                          ></td>
                           <td className={`${tableCellClassName} text-right`}>
                             <input
                               type="text"
@@ -1429,10 +1569,10 @@ export default function ProjectLeaderProjectsPage() {
                   <table className="w-full min-w-[800px] border border-yellow-200 text-sm text-gray-700">
                     <thead>
                       <tr>
-                        {['Description', 'Quantity / Unit', 'Unit Cost (₱)', 'Amount (₱)'].map((heading) => (
+                        {['Description', 'Quantity', 'Unit', 'Unit Cost (₱)', 'Total Cost (₱)'].map((heading) => (
                           <th
                             key={`other-heading-${heading}`}
-                            className={`${tableHeadCellClassName} ${heading.includes('Cost') || heading.includes('Amount') ? 'text-right' : ''}`}
+                            className={`${tableHeadCellClassName} ${heading.includes('Cost') ? 'text-right' : heading === 'Quantity' ? 'text-center' : ''}`}
                           >
                             {heading}
                           </th>
@@ -1443,8 +1583,19 @@ export default function ProjectLeaderProjectsPage() {
                       {Array.from({ length: otherExpensesRowCount }).map((_, index) => (
                         <tr key={`other-row-${index}`}>
                           <td {...editableCellProps} className={tableCellClassName}></td>
+                          <td
+                            {...editableCellProps}
+                            className={`${tableCellClassName} text-center`}
+                            onInput={(e) => handleBudgetAutoCalculate(index, 'other', e)}
+                            onKeyDown={(e) => handleNumericKeyDown(e, true)}
+                          ></td>
                           <td {...editableCellProps} className={tableCellClassName}></td>
-                          <td {...editableCellProps} className={`${tableCellClassName} text-right`}></td>
+                          <td
+                            {...editableCellProps}
+                            className={`${tableCellClassName} text-right`}
+                            onInput={(e) => handleBudgetAutoCalculate(index, 'other', e)}
+                            onKeyDown={(e) => handleNumericKeyDown(e, false)}
+                          ></td>
                           <td className={`${tableCellClassName} text-right`}>
                             <input
                               type="text"
@@ -1462,6 +1613,7 @@ export default function ProjectLeaderProjectsPage() {
                       ))}
                       <tr>
                         <td className={`font-semibold text-gray-900 ${tableCellClassName}`}>Sub-total</td>
+                        <td className={`${tableCellClassName} text-center`}></td>
                         <td className={tableCellClassName}></td>
                         <td className={`${tableCellClassName} text-right`}></td>
                         <td className={`${tableCellClassName} text-right font-semibold text-gray-900`}>
@@ -1571,6 +1723,7 @@ export default function ProjectLeaderProjectsPage() {
                           min={0}
                           step="0.5"
                           className="w-full border-none bg-transparent text-sm text-gray-900 focus:outline-none focus:ring-0"
+                          onKeyDown={(e) => handleNumericKeyDown(e, true)}
                           onChange={(event) => {
                             const raw = event.target.value.replace(/,/g, '');
                             const parsed = parseFloat(raw);

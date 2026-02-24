@@ -13,7 +13,7 @@ interface AdminProject {
     activityId?: number;
     startAt?: string;
     endAt?: string;
-  }>;
+  }>; 
 }
 
 export default function AdminProjectsPage() {
@@ -60,6 +60,10 @@ export default function AdminProjectsPage() {
   const [evaluationExtensionDeferred, setEvaluationExtensionDeferred] = useState(false);
   const [evaluationSaving, setEvaluationSaving] = useState(false);
   const [evaluationError, setEvaluationError] = useState<string | null>(null);
+  const [validationModal, setValidationModal] = useState<{ visible: boolean; message: string }>({
+    visible: false,
+    message: '',
+  });
 
   const [exportPreviewOpen, setExportPreviewOpen] = useState(false);
   const [exportPreviewKind, setExportPreviewKind] = useState<'summary' | 'beneficiaries' | null>(null);
@@ -77,7 +81,7 @@ export default function AdminProjectsPage() {
     { id: 'implementation-plan', label: 'IV. Implementation Plan' },
     { id: 'monitoring-evaluation', label: 'V. Monitoring & Evaluation Plan' },
     { id: 'organizational-capability', label: 'VI. Organizational Capability' },
-    { id: 'community-extension-team', label: 'VII. Community Extension Team' },
+    { id: 'community-extension-team', label: 'VII. Community Extension Team' }, 
     { id: 'sustainability-plan', label: 'VIII. Sustainability Plan' },
     { id: 'budgetary-requirement', label: 'IX. Budgetary Requirement' },
     { id: 'training-design', label: 'X. Training Design' },
@@ -314,6 +318,26 @@ export default function AdminProjectsPage() {
     setEvaluationError(null);
 
     try {
+      // Validation for Approval: Ensure evaluation form is fully filled
+      if (nextStatus === 'Approved') {
+        const missingRatings = evaluationRatings.some((r) => !Number.isFinite(r));
+        let validationMsg = '';
+        
+        if (!evaluationCampus.trim()) {
+          validationMsg = 'Please specify the Campus before approving.';
+        } else if (missingRatings) {
+          validationMsg = 'Please provide a rating for all criteria before approving.';
+        } else if (!evaluationOverallComments.trim()) {
+          validationMsg = 'Please provide overall comments/recommendations before approving.';
+        }
+
+        if (validationMsg) {
+          setValidationModal({ visible: true, message: validationMsg });
+          setEvaluationSaving(false);
+          return;
+        }
+      }
+
       const criteria = evaluationCriteria.map((row, index) => ({
         label: row.label,
         rating: Number.isFinite(evaluationRatings[index]) ? evaluationRatings[index] : null,
@@ -878,6 +902,13 @@ export default function AdminProjectsPage() {
                   type="button"
                   onClick={() => handleSubmitEvaluation('Approved')}
                   disabled={evaluationSaving}
+                  title={
+                    evaluationRatings.some((r) => !Number.isFinite(r)) ||
+                    !evaluationCampus.trim() ||
+                    !evaluationOverallComments.trim()
+                      ? 'Please complete the evaluation form to approve'
+                      : ''
+                  }
                   className="rounded-full bg-emerald-500 px-3 py-1 text-xs font-semibold text-white shadow hover:bg-emerald-600 disabled:cursor-not-allowed disabled:opacity-70"
                 >
                   Approve
@@ -1173,6 +1204,40 @@ export default function AdminProjectsPage() {
                   </table>
                 </div>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {validationModal.visible && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 backdrop-blur-sm">
+          <div className="w-full max-w-sm rounded-2xl bg-white p-6 shadow-2xl animate-in fade-in zoom-in duration-200">
+            <div className="flex flex-col items-center text-center">
+              <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-amber-100 text-amber-600">
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  strokeWidth={2}
+                  stroke="currentColor"
+                  className="h-6 w-6"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z"
+                  />
+                </svg>
+              </div>
+              <h3 className="mb-2 text-lg font-bold text-gray-900">Incomplete Evaluation</h3>
+              <p className="text-sm text-gray-600">{validationModal.message}</p>
+              <button
+                type="button"
+                onClick={() => setValidationModal({ visible: false, message: '' })}
+                className="mt-6 w-full rounded-xl bg-amber-500 py-2.5 text-sm font-semibold text-white shadow-lg transition hover:bg-amber-600 active:scale-95"
+              >
+                Got it
+              </button>
             </div>
           </div>
         </div>
