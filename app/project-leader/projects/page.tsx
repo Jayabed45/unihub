@@ -3277,35 +3277,33 @@ export default function ProjectLeaderProjectsPage() {
               </aside>
               <div className="flex-1 overflow-y-auto px-4 py-6 sm:px-8" data-panel-content="true">
                 <div className="mx-auto w-full max-w-6xl space-y-6">
-                  {activeSectionId !== 'applicants-section' && (
-                    <>
-                      <div className="rounded-xl border border-yellow-100 bg-yellow-50/60 p-4 text-xs text-yellow-800">
-                        <p className="font-semibold uppercase tracking-wide">Reminder</p>
-                        <p>
-                          Fill out each section completely. Required subsections and tables are provided to mirror the
-                          instructor-approved template.
-                        </p>
-                      </div>
-                      <div
-                        className={`space-y-5 text-sm text-gray-700 ${
-                          panelMode === 'review' ? 'pointer-events-none opacity-75' : ''
-                        }`}
-                      >
-                        {proposalSections.map((section) => (
-                          <div
-                            key={section.id}
-                            data-section-id={section.id}
-                            className={section.id === activeSectionId ? 'space-y-5' : 'hidden'}
-                            aria-hidden={section.id === activeSectionId ? 'false' : 'true'}
-                          >
-                            {section.content}
-                          </div>
-                        ))}
-                      </div>
-                    </>
-                  )}
+                  <div className={activeSectionId !== 'applicants-section' ? 'space-y-6' : 'hidden'}>
+                    <div className="rounded-xl border border-yellow-100 bg-yellow-50/60 p-4 text-xs text-yellow-800">
+                      <p className="font-semibold uppercase tracking-wide">Reminder</p>
+                      <p>
+                        Fill out each section completely. Required subsections and tables are provided to mirror the
+                        instructor-approved template.
+                      </p>
+                    </div>
+                    <div
+                      className={`space-y-5 text-sm text-gray-700 ${
+                        panelMode === 'review' ? 'pointer-events-none opacity-75' : ''
+                      }`}
+                    >
+                      {proposalSections.map((section) => (
+                        <div
+                          key={section.id}
+                          data-section-id={section.id}
+                          className={section.id === activeSectionId ? 'space-y-5' : 'hidden'}
+                          aria-hidden={section.id === activeSectionId ? 'false' : 'true'}
+                        >
+                          {section.content}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
 
-                  {activeSectionId === 'applicants-section' && (
+                  <div className={activeSectionId === 'applicants-section' ? 'block' : 'hidden'}>
                     <section
                       className="space-y-3 rounded-xl border border-yellow-100 bg-white p-4 text-xs text-gray-800"
                       data-section-id="applicants-section"
@@ -3442,7 +3440,7 @@ export default function ProjectLeaderProjectsPage() {
                         </div>
                       )}
                     </section>
-                  )}
+                  </div>
                 </div>
               </div>
             </div>
