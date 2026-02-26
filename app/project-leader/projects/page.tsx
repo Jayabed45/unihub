@@ -903,7 +903,6 @@ export default function ProjectLeaderProjectsPage() {
                 <input
                   className={inputClassName}
                   placeholder="e.g., 48 hours"
-                  onKeyDown={(e) => handleNumericKeyDown(e, true)}
                 />
               </div>
               <div className="grid items-start gap-3 md:grid-cols-[240px_16px_1fr]">
@@ -912,7 +911,6 @@ export default function ProjectLeaderProjectsPage() {
                 <input
                   className={inputClassName}
                   placeholder="e.g., 20 homeowners (11 Female / 9 Male)"
-                  onKeyDown={(e) => handleNumericKeyDown(e, true)}
                 />
               </div>
               <div className="grid items-start gap-3 md:grid-cols-[240px_16px_1fr]">
@@ -921,7 +919,6 @@ export default function ProjectLeaderProjectsPage() {
                 <input
                   className={inputClassName}
                   placeholder="e.g., ₱93,500.00"
-                  onKeyDown={(e) => handleNumericKeyDown(e, false)}
                 />
               </div>
               <div className="grid items-start gap-3 md:grid-cols-[240px_16px_1fr]">
